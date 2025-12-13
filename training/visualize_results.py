@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-可視化工具 - 展示模型預測準確度與價格線對齊情況
+可視化工具 - 展示模型預測準確度與價格線的對比
 生成多種圖表幫助評估模型性能
 """
 
@@ -13,6 +13,10 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 
+# 添加項目路徑
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -21,7 +25,7 @@ from matplotlib.patches import Patch
 import seaborn as sns
 import torch
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error, r2_score, accuracy_score
 
 # 設定 UTF-8
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -44,24 +48,26 @@ class ModelVisualizer:
     def load_results(self) -> dict:
         """載入訓練結果"""
         try:
-            with open(self.results_path, 'r') as f:
+            with open(self.results_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except FileNotFoundError:
-            print(f"❌ Results file not found: {self.results_path}")
+            print(f"❌ 結果文件不存在: {self.results_path}")
             return None
     
     def fetch_and_predict(self, limit: int = 200):
         """獲取數據並進行預測"""
         try:
             import ccxt
-            from training.train_lstm_v1 import (
+            import yaml
+            
+            # 動態導入訓練模塊
+            from train_lstm_v1 import (
                 LSTMModel, add_technical_indicators, 
                 prepare_sequences, calculate_direction_accuracy
             )
-            import yaml
             
             # 載入配置
-            with open('training/config.yaml', 'r') as f:
+            with open('training/config.yaml', 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
             
             # 獲取數據
@@ -89,7 +95,7 @@ class ModelVisualizer:
             X_scaled = scaler_X.fit_transform(X)
             y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
             
-            # 確保特徵數為 44
+            # 確保 X 的特徵數為 44
             if X_scaled.shape[1] > 44:
                 X_scaled = X_scaled[:, :44]
             elif X_scaled.shape[1] < 44:
@@ -128,13 +134,15 @@ class ModelVisualizer:
             }
         
         except Exception as e:
-            print(f"❌ Error during prediction: {e}")
+            print(f"❌ 預測失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def create_visualizations(self, pred_data: dict):
         """建立多個可視化圖表"""
         if pred_data is None:
-            print("❌ No prediction data available")
+            print("❌ 沒有預測數據可用")
             return
         
         y_true = pred_data['y_true']
@@ -165,14 +173,14 @@ class ModelVisualizer:
         ax1.grid(True, alpha=0.3)
         plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45)
         
-        # 2. 誤差分佈
+        # 2. 誤差分布
         ax2 = plt.subplot(3, 2, 2)
         errors = np.abs(y_true - y_pred)
         ax2.hist(errors, bins=30, color='#2ca02c', alpha=0.7, edgecolor='black')
         ax2.axvline(mae, color='red', linestyle='--', linewidth=2, label=f'平均誤差: ${mae:.4f}')
         ax2.set_xlabel('絕對誤差 (USD)')
         ax2.set_ylabel('頻率')
-        ax2.set_title('誤差分佈', fontweight='bold')
+        ax2.set_title('誤差分布', fontweight='bold')
         ax2.legend()
         ax2.grid(True, alpha=0.3, axis='y')
         
@@ -271,9 +279,16 @@ class ModelVisualizer:
     @staticmethod
     def _calculate_direction_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         """計算方向準確度"""
-        true_dirs = np.diff(y_true, prepend=0) > 0
-        pred_dirs = np.diff(y_pred, prepend=0) > 0
-        return np.mean(true_dirs == pred_dirs)
+        # 計算實際價格變化方向
+        y_true_diff = np.diff(y_true, prepend=0)
+        y_true_dir = (y_true_diff > 0).astype(int)
+        
+        # 計算預測價格變化方向
+        y_pred_diff = np.diff(y_pred, prepend=0)
+        y_pred_dir = (y_pred_diff > 0).astype(int)
+        
+        # 計算準確度
+        return accuracy_score(y_true_dir, y_pred_dir)
 
 
 def main():
