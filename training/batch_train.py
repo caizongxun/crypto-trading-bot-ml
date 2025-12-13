@@ -5,7 +5,8 @@
 支援斷點續訓、進度追蹤、自動 git 提交
 
 用法:
-  python training/batch_train.py                    # 訓練市值前 20 的幣種
+  python training/batch_train.py                    # 訓練市值前 20 的幣種 (GPU)
+  python training/batch_train.py --device cpu      # 使用 CPU 訓練
   python training/batch_train.py --symbols SOL,BTC,ETH  # 訓練指定幣種
   python training/batch_train.py --symbols-file symbols.txt  # 從文件讀取
   python training/batch_train.py --resume SOL      # 從 SOL 繼續訓練
@@ -54,9 +55,10 @@ TOP_20_SYMBOLS = [
 class BatchTrainer:
     """批量訓練管理器"""
     
-    def __init__(self, symbols: List[str], epochs: int = 200, auto_git: bool = True):
+    def __init__(self, symbols: List[str], epochs: int = 200, device: str = 'cuda', auto_git: bool = True):
         self.symbols = symbols
         self.epochs = epochs
+        self.device = device
         self.auto_git = auto_git
         self.results = {}
         self.failed = {}
@@ -68,7 +70,8 @@ class BatchTrainer:
         print(f"批量訓練管理器")
         print(f"{'='*80}")
         print(f"幣種數量: {len(self.symbols)}")
-        print(f"訓練輪數: {self.epochs}")
+        print(f"訓練輪数: {self.epochs}")
+        print(f"設备: {self.device.upper()}")
         print(f"自動提交: {self._yn(auto_git)}")
         print(f"日誌文件: {self.log_file}")
         print(f"\n開始訓練: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -99,7 +102,8 @@ class BatchTrainer:
                 'python',
                 'training/train_lstm_v1.py',
                 '--symbol', symbol,
-                '--epochs', str(self.epochs)
+                '--epochs', str(self.epochs),
+                '--device', self.device
             ]
             
             result = subprocess.run(
@@ -270,6 +274,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\n例子:
   python training/batch_train.py
+  python training/batch_train.py --device cpu
   python training/batch_train.py --symbols SOL,BTC,ETH
   python training/batch_train.py --symbols-file symbols.txt
   python training/batch_train.py --resume SOL
@@ -303,6 +308,13 @@ def main():
         help='每個模型的訓練輪數 (預設: 200)'
     )
     parser.add_argument(
+        '--device',
+        type=str,
+        default='cuda',
+        choices=['cuda', 'cpu'],
+        help='訓練設備 (預設: cuda)'
+    )
+    parser.add_argument(
         '--no-git',
         action='store_true',
         help='不自動提交到 GitHub'
@@ -320,7 +332,7 @@ def main():
         symbols = TOP_20_SYMBOLS
     
     # 創建訓練器並運行
-    trainer = BatchTrainer(symbols, args.epochs, not args.no_git)
+    trainer = BatchTrainer(symbols, args.epochs, args.device, not args.no_git)
     trainer.train_all(resume_from=args.resume)
 
 
