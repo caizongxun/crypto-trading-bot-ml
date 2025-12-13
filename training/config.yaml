@@ -12,7 +12,7 @@ model:
 
 training:
   epochs: 200
-  batch_size: 16         # ✅ GPU 4GB 時樣値 (32 會 OOM)
+  batch_size: 16         # ✅ GPU 4GB 時的最优值 (32 會 OOM)
   learning_rate: 0.0005  # ✅ 微微向下
   weight_decay: 0.0001   # L2 正則化
   lookback_window: 60    # ✅ 輸入序列長度
@@ -22,14 +22,14 @@ training:
   test_split: 0.1
 
 optimization:
-  optimizer: adamw       # 改成 AdamW 帮助正則化
+  optimizer: adamw       # AdamW 改進
   scheduler: cosine      # Cosine annealing learning rate
   warmup_steps: 500
   patience: 25           # Early stopping 對耐心
-  min_delta: 1e-6        # 最少改進算何
+  min_delta: 1.0e-6      # 最少改進算何 (確保是數字)
 
 data:
-  timeframe: 1h
+  timeframe: '1h'
   limit: 5000            # 載入 ~3-4 個月數據
   normalize: true
   augmentation: false
