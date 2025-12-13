@@ -1,42 +1,37 @@
-# LSTM 訓練配置
+# LSTM 訓練配置 v1.1
+# 基於實際訓練訃整的最优配置
 
 model:
   type: lstm
-  input_size: 44  # 技術指標數量
-  hidden_size: 128
-  num_layers: 2
+  input_size: 44         # ✅ 實際特徵數 (不是 8、或一切它)
+  hidden_size: 128       # ✅ GPU 4GB 優化版本
+  num_layers: 2          # ✅ Bidirectional LSTM 3+ 效果好
   output_size: 1
-  dropout: 0.3
-  bidirectional: true
+  dropout: 0.3           # ✅ 正見化強度
+  bidirectional: true    # ✅ 雙樣本 LSTM
 
 training:
   epochs: 200
-  batch_size: 32
-  learning_rate: 0.001
-  weight_decay: 0.0001
-  lookback_window: 60
-  forecast_horizon: 1
+  batch_size: 16         # ✅ GPU 4GB 時樣値 (32 會 OOM)
+  learning_rate: 0.0005  # ✅ 微微向下
+  weight_decay: 0.0001   # L2 正則化
+  lookback_window: 60    # ✅ 輸入序列長度
+  forecast_horizon: 1    # 預測不积渦
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
 
 optimization:
-  optimizer: adam
-  scheduler: cosine  # warmup + cosine annealing
+  optimizer: adamw       # 改成 AdamW 帮助正則化
+  scheduler: cosine      # Cosine annealing learning rate
   warmup_steps: 500
-  patience: 20
-  min_delta: 1e-6
+  patience: 25           # Early stopping 對耐心
+  min_delta: 1e-6        # 最少改進算何
 
 data:
   timeframe: 1h
-  limit: 5000  # 最近三个月
+  limit: 5000            # 載入 ~3-4 個月數據
   normalize: true
   augmentation: false
 
-logging:
-  verbose: true
-  log_every: 10
-  save_best_only: true
-  save_interval: 5
-
-device: cuda  # cuda 或 cpu
+device: cuda            # GPU 強化
