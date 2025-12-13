@@ -170,7 +170,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # 基礎 OHLCV
     features = ['open', 'high', 'low', 'close', 'volume']
     
-    # 價格動量指標
+    # 價格動量
     df['returns'] = df['close'].pct_change()
     df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
     
@@ -230,13 +230,13 @@ def calculate_atr(df: pd.DataFrame, window: int) -> pd.Series:
 
 
 def calculate_rsi(prices: pd.Series, window: int = 14) -> pd.Series:
-    """計算 RSI"""
+    """計算 RSI - 修復版本"""
     deltas = prices.diff()
     seed = deltas[:window+1]
     up = seed[seed >= 0].sum() / window
     down = -seed[seed < 0].sum() / window
-    rs = up / down
-    rsi = 100. - 100. / (1. + rs)
+    rs = up / (down + 1e-8)
+    rsi = pd.Series(100. - 100. / (1. + rs), index=prices.index)  # 確保是 Series
     rsi[:window] = 0
     return rsi
 
@@ -386,7 +386,7 @@ def main():
     if X_scaled.shape[1] > 44:
         X_scaled = X_scaled[:, :44]
     elif X_scaled.shape[1] < 44:
-        # 補足到 44 列
+        # 補充到 44 列
         padding = np.zeros((X_scaled.shape[0], 44 - X_scaled.shape[1]))
         X_scaled = np.hstack([X_scaled, padding])
     
@@ -488,9 +488,9 @@ def main():
     rmse = np.sqrt(mean_squared_error(test_trues_inverse, test_preds_inverse))
     dir_acc = calculate_direction_accuracy(test_trues_inverse, test_preds_inverse)
     
-    logger.info(f"MAE:               {mae:.6f} USD")
-    logger.info(f"MAPE:              {mape:.4f} %")
-    logger.info(f"RMSE:              {rmse:.6f} USD")
+    logger.info(f"MAE:                {mae:.6f} USD")
+    logger.info(f"MAPE:               {mape:.4f} %")
+    logger.info(f"RMSE:               {rmse:.6f} USD")
     logger.info(f"Direction Accuracy: {dir_acc:.2%}")
     logger.info("="*80)
     
