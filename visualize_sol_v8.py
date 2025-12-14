@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 SOL V8 可視化器 - 使用訓練好的 V8 模型
+模型路徑: models/backup_v8/
 
 用法:
   python visualize_sol_v8.py
@@ -32,7 +33,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 logger = None
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# V8 配置 (44 個技术指標)
+# V8 配置 (44 個技術指標)
 MODEL_CONFIG = {
     'input_size': 44,
     'hidden_size': 128,
@@ -59,7 +60,7 @@ def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
         exchange = ccxt.binance({'enableRateLimit': True})
         symbol_pair = f"{symbol}/USDT"
         
-        logger.info(f"📊 接取 {limit} 根蹫樗價 {symbol}/{timeframe}...")
+        logger.info(f"📊 接取 {limit} 根蠋燭價 {symbol}/{timeframe}...")
         ohlcv = exchange.fetch_ohlcv(symbol_pair, timeframe, limit=limit)
         
         df = pd.DataFrame(
@@ -70,7 +71,7 @@ def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df = df.sort_values('timestamp').reset_index(drop=True)
         
-        logger.info(f"✓ 接取完成 {len(df)} 根蹫樗價")
+        logger.info(f"✓ 接取完成 {len(df)} 根蠋燭價")
         return df
     
     except Exception as e:
@@ -79,7 +80,7 @@ def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
 
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """添加 44 個技术指標 (V8 版本)"""
+    """添加 44 個技術指標 (V8 版本)"""
     try:
         # 基本作用
         df['high-low'] = df['high'] - df['low']
@@ -122,7 +123,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         tp = (df['high'] + df['low'] + df['close']) / 3
         df['cci'] = (tp - tp.rolling(window=20).mean()) / (0.015 * tp.rolling(window=20).std())
         
-        # 移劸平均
+        # 移動平均
         df['sma5'] = df['close'].rolling(window=5).mean()
         df['sma10'] = df['close'].rolling(window=10).mean()
         df['sma20'] = df['close'].rolling(window=20).mean()
@@ -134,11 +135,11 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         
         df = df.ffill()
         
-        logger.info(f"✓ 添加了 {len([col for col in df.columns if col not in ['timestamp', 'open', 'high', 'low', 'close', 'volume']])} 個技术指標 (V8)")
+        logger.info(f"✓ 添加了 {len([col for col in df.columns if col not in ['timestamp', 'open', 'high', 'low', 'close', 'volume']])} 個技術指標 (V8)")
         return df
     
     except Exception as e:
-        logger.error(f"❌ 添加技术指標失敗: {e}")
+        logger.error(f"❌ 添加技術指標失敗: {e}")
         return None
 
 
@@ -194,10 +195,10 @@ def predict_sol():
         logger.error(f"❌ 接取 SOL 數據失敗")
         return None
     
-    # 添加技术指標 (V8: 44 個)
+    # 添加技術指標 (V8: 44 個)
     df = add_technical_indicators(df)
     if df is None:
-        logger.error(f"❌ 添加技术指標失敗")
+        logger.error(f"❌ 添加技術指標失敗")
         return None
     
     # 特徵提取
@@ -232,12 +233,22 @@ def predict_sol():
     
     logger.info(f"✓ 數據分割: Train={train_size}, Val={val_size}, Test={len(X_test)}")
     
-    # 加載模型
-    model_path = f'models/saved/SOL_model.pth'
+    # 加載模型 - 從 backup_v8 路徑
+    model_path = f'models/backup_v8/SOL_model.pth'
     if not os.path.exists(model_path):
         logger.error(f"❌ 找不到 SOL 模型: {model_path}")
-        logger.info(f"\n💡 SOL V8 模型尚未訓練。請先運行:")
-        logger.info(f"   python training/train_lstm_v8.py --symbol SOL --epochs 150")
+        logger.info(f"\n📁 檢查以下路徑:")
+        logger.info(f"   1. {model_path}")
+        
+        # 嘗試列出 backup_v8 目錄
+        backup_dir = 'models/backup_v8'
+        if os.path.exists(backup_dir):
+            logger.info(f"\n   backup_v8 目錄中的文件:")
+            for file in os.listdir(backup_dir):
+                logger.info(f"      - {file}")
+        else:
+            logger.info(f"   ❌ {backup_dir} 目錄不存在")
+        
         return None
     
     model = RegressionLSTM()
@@ -245,7 +256,8 @@ def predict_sol():
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
-    logger.info(f"✓ V8 模型加載成功 (44 个技术指標)")
+    logger.info(f"✓ V8 模型加載成功 (44 個技術指標)")
+    logger.info(f"   路徑: {model_path}")
     
     # 預測
     with torch.no_grad():
@@ -288,7 +300,7 @@ def main():
     setup_logging()
     
     logger.info('\n' + '='*60)
-    logger.info('SOL 個平霹化器 - V8 際定模型')
+    logger.info('SOL 個評析化器 - V8 穩定模型')
     logger.info('='*60)
     
     result = predict_sol()
@@ -310,7 +322,7 @@ def main():
     ax.plot(x, actual, 'b-', label='Actual Price', linewidth=2.5, alpha=0.8)
     ax.plot(x, predicted, 'r-', label='Predicted Price (V8)', linewidth=2.5, alpha=0.8)
     
-    ax.set_title(f"SOL V8 价格預測 - MAE: {result['mae']:.4f} USD | MAPE: {result['mape']:.4f}%", 
+    ax.set_title(f"SOL V8 價格預測 - MAE: {result['mae']:.4f} USD | MAPE: {result['mape']:.4f}%", 
                  fontsize=14, fontweight='bold')
     ax.set_xlabel('Time Steps', fontsize=12)
     ax.set_ylabel('Price (USD)', fontsize=12)
@@ -473,91 +485,57 @@ def main():
         </style>
     </head>
     <body>
-        <div class="container">
+        <div class=\"container\">
             <header>
                 <h1>📊 SOL V8 模型預測</h1>
                 <p>Solana Price Prediction - V8 Stable Model</p>
-                <span class="badge">V8 穩定模型</span>
+                <span class=\"badge\">V8 穩定模型</span>
             </header>
             
-            <div class="content">
-                <div class="version-note">
+            <div class=\"content\">
+                <div class=\"version-note\">
                     <strong>🌟 V8 特點:</strong>
-                    <ul style="margin-left: 20px; margin-top: 10px;">
-                        <li>✓ 策猿詳定 - 128 x 2 网络結构</li>
-                        <li>✓ 44 个技术指標 (帷批索轉所需)</li>
-                        <li>✓ 已經过訓練驗證 (效果穩定)</li>
-                        <li>✓ 推舗镜像应用</li>
+                    <ul style=\"margin-left: 20px; margin-top: 10px;\">
+                        <li>✓ 策略穩定 - 128 x 2 網絡結構</li>
+                        <li>✓ 44 個技術指標 (覆蓋索轉所需)</li>
+                        <li>✓ 已經過訓練驗證 (效果穩定)</li>
+                        <li>✓ 推薦鏡像應用</li>
                     </ul>
                 </div>
                 
-                <div class="section">
+                <div class=\"section\">
                     <h2>📈 性能指標</h2>
-                    <div class="stats">
-                        <div class="stat-card">
-                            <div class="stat-label">平均綕對誤差</div>
-                            <div class="stat-value">{result['mae']:.6f}</div>
-                            <div class="stat-label">USD</div>
+                    <div class=\"stats\">
+                        <div class=\"stat-card\">
+                            <div class=\"stat-label\">平均絕對誤差</div>
+                            <div class=\"stat-value\">{result['mae']:.6f}</div>
+                            <div class=\"stat-label\">USD</div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-label">平均百分比誤差</div>
-                            <div class="stat-value">{result['mape']:.4f}</div>
-                            <div class="stat-label">%</div>
+                        <div class=\"stat-card\">
+                            <div class=\"stat-label\">平均百分比誤差</div>
+                            <div class=\"stat-value\">{result['mape']:.4f}</div>
+                            <div class=\"stat-label\">%</div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-label">根平方誤差</div>
-                            <div class="stat-value">{result['rmse']:.6f}</div>
-                            <div class="stat-label">USD</div>
+                        <div class=\"stat-card\">
+                            <div class=\"stat-label\">根平方誤差</div>
+                            <div class=\"stat-value\">{result['rmse']:.6f}</div>
+                            <div class=\"stat-label\">USD</div>
                         </div>
                     </div>
                 </div>
                 
-                <div class="section">
-                    <h2>📉 價格路徑對比</h2>
-                    <p>📅 藍線 = 實際價格 | 紅線 = V8 預測價格</p>
-                    <img src="SOL_predictions_v8.png" alt="SOL Price Predictions">
+                <div class=\"section\">
+                    <h2>📈 價格路徑對比</h2>
+                    <p>📍 藍線 = 實際價格 | 紅線 = V8 預測價格</p>
+                    <img src=\"SOL_predictions_v8.png\" alt=\"SOL Price Predictions\">
                 </div>
                 
-                <div class="section">
-                    <h2>📄 指標比較</h2>
-                    <img src="SOL_metrics_v8.png" alt="SOL Metrics">
+                <div class=\"section\">
+                    <h2>📋 指標比較</h2>
+                    <img src=\"SOL_metrics_v8.png\" alt=\"SOL Metrics\">
                 </div>
                 
-                <div class="section">
-                    <h2>ℹ️ 模型資誊</h2>
-                    <div style="background: #f5f5f5; padding: 15px; border-radius: 8px;">
-                        <p><strong>🎯 网络結構:</strong> 128 隱藏 x 2 层 (V8 檀准配置)</p>
-                        <p><strong>📋 技术指標:</strong> 44 個</p>
-                        <p><strong>📄 訓練 Epochs:</strong> 150</p>
-                        <p><strong>📉 Loss 函數:</strong> MSE</p>
-                        <p><strong>✨ 優化:</strong> Adam 優化器</p>
-                    </div>
-                </div>
-            </div>
-            
-            <footer>
-                <p>📊 SOL V8 預測 | 生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-                <p style="margin-top: 10px;">Data from CCXT / Binance API</p>
-            </footer>
-        </div>
-    </body>
-    </html>
-    """
-    
-    with open('SOL_predictions_v8.html', 'w', encoding='utf-8') as f:
-        f.write(html_content)
-    
-    logger.info("✓ 保存: SOL_predictions_v8.html")
-    
-    logger.info("\n" + "="*60)
-    logger.info("✅ 完成！")
-    logger.info("="*60)
-    logger.info(f"\n📄 生成的文件:")
-    logger.info(f"  - SOL_predictions_v8.png (价格路径对比)")
-    logger.info(f"  - SOL_metrics_v8.png (性能指標)")
-    logger.info(f"  - SOL_predictions_v8.html (HTML报告)")
-    logger.info(f"\n🌐 在浏览器中打开: SOL_predictions_v8.html")
-
-
-if __name__ == '__main__':
-    main()
+                <div class=\"section\">
+                    <h2>ℹ️ 模型資訊</h2>
+                    <div style=\"background: #f5f5f5; padding: 15px; border-radius: 8px;\">
+                        <p><strong>🧠 網絡結構:</strong> 128 隱藏 x 2 層 (V8 標準配置)</p>\n                        <p><strong>📋 技術指標:</strong> 44 個</p>\n                        <p><strong>📊 訓練 Epochs:</strong> 150</p>\n                        <p><strong>📉 Loss 函數:</strong> MSE</p>\n                        <p><strong>✨ 優化:</strong> Adam 優化器</p>\n                        <p><strong>📁 模型路徑:</strong> models/backup_v8/SOL_model.pth</p>\n                    </div>\n                </div>\n            </div>\n            \n            <footer>\n                <p>📊 SOL V8 預測 | 生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>\n                <p style=\"margin-top: 10px;\">Data from CCXT / Binance API</p>\n            </footer>\n        </div>\n    </body>\n    </html>\n    \"\"\"\n    \n    with open('SOL_predictions_v8.html', 'w', encoding='utf-8') as f:\n        f.write(html_content)\n    \n    logger.info(\"✓ 保存: SOL_predictions_v8.html\")\n    \n    logger.info(\"\\n\" + \"=\"*60)\n    logger.info(\"✅ 完成！\")\n    logger.info(\"=\"*60)\n    logger.info(f\"\\n📄 生成的文件:\")\n    logger.info(f\"  - SOL_predictions_v8.png (價格路徑對比)\")\n    logger.info(f\"  - SOL_metrics_v8.png (性能指標)\")\n    logger.info(f\"  - SOL_predictions_v8.html (HTML報告)\")\n    logger.info(f\"\\n🌐 在瀏覽器中打開: SOL_predictions_v8.html\")\n\n\nif __name__ == '__main__':\n    main()\n
