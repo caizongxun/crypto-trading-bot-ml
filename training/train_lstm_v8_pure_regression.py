@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LSTM 訓練腳本 V8 - 純價格回歸
+LSTM 訓練腳本 V8 - 純價格回歸 (修正版)
 
 策略：
 - 只做一件事：價格回歸
-- V1 已經証實 MAE 0.717 是有效的
-- 不要賽驟、不要 multi-task、不要超複雅
-- 就是简単的一个 LSTM + 一个 Linear
+- V7 已經証實 MAE 0.977 是有效的
+- 使用 V7 的采樣器 + 曮度袪斷 來穩定訓練
+- 為什麼 V8 失敗？因為小 batch 時 normalization issues
 用法:
   python training/train_lstm_v8_pure_regression.py --symbol SOL
   python training/train_lstm_v8_pure_regression.py --symbol BTC --batch-size 16
@@ -26,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error
 
@@ -45,12 +45,12 @@ DEFAULT_CONFIG = {
         'input_size': 44,
         'hidden_size': 128,
         'num_layers': 2,
-        'dropout': 0.2,
+        'dropout': 0.3,
         'bidirectional': True,
     },
     'training': {
-        'epochs': 100,
-        'batch_size': 16,
+        'epochs': 150,
+        'batch_size': 16,  # 打回 V7 成功的 batch size
         'learning_rate': 0.001,
         'weight_decay': 0.0001,
         'lookback_window': 60,
@@ -61,8 +61,9 @@ DEFAULT_CONFIG = {
     'optimization': {
         'optimizer': 'adamw',
         'scheduler': 'cosine',
-        'patience': 15,
+        'patience': 20,
         'min_delta': 1e-6,
+        'grad_clip': 1.0,
     },
     'data': {
         'timeframe': '1h',
@@ -185,11 +186,11 @@ def prepare_sequences(X, y, lookback=60):
     return np.array(X_seq), np.array(y_seq)
 
 
-class SimpleLSTM(nn.Module):
-    """粗粗简单的 LSTM 回歸模型"""
+class RegressionLSTM(nn.Module):
+    """回歸 LSTM 模型"""
     
     def __init__(self, config):
-        super(SimpleLSTM, self).__init__()
+        super(RegressionLSTM, self).__init__()
         
         self.lstm = nn.LSTM(
             input_size=config['model']['input_size'],
@@ -202,7 +203,7 @@ class SimpleLSTM(nn.Module):
         
         lstm_output_size = config['model']['hidden_size'] * (2 if config['model']['bidirectional'] else 1)
         
-        # 简单回歸頭
+        # 粗粗粗的回歸頭
         self.regressor = nn.Sequential(
             nn.Linear(lstm_output_size, 64),
             nn.ReLU(),
@@ -219,7 +220,7 @@ class SimpleLSTM(nn.Module):
         return price
 
 
-def train_epoch(model, train_loader, optimizer, device):
+def train_epoch(model, train_loader, optimizer, device, config):
     """訓練一個 epoch"""
     model.train()
     total_loss = 0
@@ -233,13 +234,18 @@ def train_epoch(model, train_loader, optimizer, device):
         price_pred = model(X_batch)
         loss = nn.MSELoss()(price_pred, y_batch)
         
+        # 抪斷 NaN
+        if torch.isnan(loss):
+            logger.warning("  NaN loss detected, skipping batch")
+            continue
+        
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config['optimization']['grad_clip'])
         optimizer.step()
         
         total_loss += loss.item()
     
-    return total_loss / len(train_loader)
+    return total_loss / max(len(train_loader), 1)
 
 
 def validate(model, val_loader, device):
@@ -255,9 +261,10 @@ def validate(model, val_loader, device):
             price_pred = model(X_batch)
             loss = nn.MSELoss()(price_pred, y_batch)
             
-            total_loss += loss.item()
+            if not torch.isnan(loss):
+                total_loss += loss.item()
     
-    return total_loss / len(val_loader)
+    return total_loss / max(len(val_loader), 1)
 
 
 def cleanup_old_models(symbol: str):
@@ -273,9 +280,9 @@ def main():
     global logger
     
     import argparse
-    parser = argparse.ArgumentParser(description='LSTM Training v8 - Pure Price Regression')
+    parser = argparse.ArgumentParser(description='LSTM Training v8 - Pure Price Regression (Fixed)')
     parser.add_argument('--symbol', type=str, default='SOL', help='Trading symbol')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
+    parser.add_argument('--epochs', type=int, default=150, help='Number of epochs')
     parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda or cpu)')
@@ -286,14 +293,14 @@ def main():
     setup_logging(args.symbol, version='v8')
     
     logger.info('='*80)
-    logger.info('LSTM MODEL TRAINING (V8 - Pure Price Regression)')
+    logger.info('LSTM MODEL TRAINING (V8 - Pure Price Regression - FIXED)')
     logger.info('='*80)
     logger.info(f"Symbol: {args.symbol}")
     logger.info(f"Device: {args.device}")
     logger.info(f"Epochs: {args.epochs}")
     logger.info(f"Batch Size: {args.batch_size}")
     logger.info(f"Learning Rate: {args.lr}")
-    logger.info(f"Strategy: Simple LSTM regression (proven V1 approach)")
+    logger.info(f"Strategy: Simple LSTM regression with V7-proven stability")
     
     # 加載配置
     config = DEFAULT_CONFIG.copy()
@@ -357,7 +364,7 @@ def main():
     
     # 6. 建立模型
     logger.info("\n[4/5] Building model...")
-    model = SimpleLSTM(config)
+    model = RegressionLSTM(config)
     model.to(args.device)
     logger.info(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
     
@@ -371,21 +378,23 @@ def main():
     
     best_val_loss = float('inf')
     patience_counter = 0
+    model_saved = False
     
     for epoch in range(config['training']['epochs']):
-        train_loss = train_epoch(model, train_loader, optimizer, args.device)
+        train_loss = train_epoch(model, train_loader, optimizer, args.device, config)
         val_loss = validate(model, val_loader, args.device)
         scheduler.step()
         
-        if val_loss < best_val_loss - config['optimization']['min_delta']:
+        if not torch.isnan(torch.tensor(val_loss)) and val_loss < best_val_loss - config['optimization']['min_delta']:
             best_val_loss = val_loss
             patience_counter = 0
             os.makedirs('models/saved', exist_ok=True)
             torch.save(model.state_dict(), f'models/saved/{args.symbol}_model.pth')
+            model_saved = True
         else:
             patience_counter += 1
         
-        if (epoch + 1) % 10 == 0 or patience_counter >= config['optimization']['patience']:
+        if (epoch + 1) % 15 == 0 or patience_counter >= config['optimization']['patience']:
             logger.info(f"Epoch {epoch+1:3d}/{config['training']['epochs']} | "
                       f"Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
         
@@ -397,6 +406,11 @@ def main():
     logger.info("\n" + "="*80)
     logger.info("EVALUATION - Price Regression")
     logger.info("="*80)
+    
+    if not model_saved:
+        logger.error("Model was not saved during training. Training failed.")
+        logger.info("This might be due to NaN losses. Try reducing learning rate.")
+        return
     
     model.load_state_dict(torch.load(f'models/saved/{args.symbol}_model.pth'))
     model.eval()
@@ -438,7 +452,7 @@ def main():
         'rmse': float(rmse),
         'test_samples': len(test_trues),
         'model_params': sum(p.numel() for p in model.parameters()),
-        'method': 'simple_lstm_regression',
+        'method': 'simple_lstm_regression_v7_stable',
     }
     
     os.makedirs('results', exist_ok=True)
