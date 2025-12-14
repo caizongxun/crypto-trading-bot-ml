@@ -1,25 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LSTM 訓練腳本 v2 - 方向準確度優化版
+LSTM 訓練腳本 v2 - 方向準確度優化版本
 基於 v1 模型進行微調，增強方向預測準確度
 
 特色：
 - 從 v1 模型加載並繼續訓練
 - 專注於方向準確度優化
-- 支持回退到 v1
+- 支援回滾到 v1
 
 用法:
   python training/train_lstm_v2.py --symbol SOL
   python training/train_lstm_v2.py --symbol BTC --epochs 100
-  python training/train_lstm_v2.py --symbol ETH --load-v1  # 從 v1 加載
+  python training/train_lstm_v2.py --symbol ETH --load-v1
 """
 
 import os
 import sys
 import io
 import json
-import argparse
 from pathlib import Path
 from datetime import datetime
 import shutil
@@ -33,13 +32,13 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_absolute_error, mean_absolute_percentage_error, mean_squared_error, accuracy_score
 
-import yaml
+import ccxt
+
 import logging
 
 # 設定 Windows UTF-8 編碼
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-config = None
 logger = None
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -73,7 +72,7 @@ DEFAULT_CONFIG = {
     },
     'data': {
         'timeframe': '1h',
-        'limit': 5000,
+        'limit': 1000,
         'normalize': True,
     },
     'device': 'cuda',
@@ -100,14 +99,103 @@ def setup_logging(symbol: str, version: str = 'v2'):
     logger = logging.getLogger(__name__)
 
 
-def load_config(config_path: str = 'training/config.yaml') -> dict:
-    """載入配置檔或使用預設值"""
+def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
+    """獲取加密貨幣數據"""
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    except FileNotFoundError:
-        logger.warning(f"Config file {config_path} not found, using defaults")
-        return DEFAULT_CONFIG
+        exchange = ccxt.binance({'enableRateLimit': True})
+        symbol_pair = f"{symbol}/USDT"
+        
+        logger.info(f"Fetching {limit} candles for {symbol}/{timeframe}...")
+        
+        ohlcv = exchange.fetch_ohlcv(symbol_pair, timeframe, limit=limit)
+        
+        df = pd.DataFrame(
+            ohlcv,
+            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        )
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        
+        logger.info(f"✓ Fetched {len(df)} candles for {symbol}/{timeframe}")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error fetching data: {e}")
+        raise
+
+
+def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    """添加技術指標"""
+    try:
+        # RSI
+        delta = df['close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['rsi'] = 100 - (100 / (1 + rs))
+        
+        # MACD
+        ema12 = df['close'].ewm(span=12).mean()
+        ema26 = df['close'].ewm(span=26).mean()
+        df['macd'] = ema12 - ema26
+        df['macd_signal'] = df['macd'].ewm(span=9).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        
+        # Bollinger Bands
+        sma20 = df['close'].rolling(window=20).mean()
+        std20 = df['close'].rolling(window=20).std()
+        df['bb_upper'] = sma20 + (std20 * 2)
+        df['bb_middle'] = sma20
+        df['bb_lower'] = sma20 - (std20 * 2)
+        
+        # ATR
+        tr1 = df['high'] - df['low']
+        tr2 = abs(df['high'] - df['close'].shift())
+        tr3 = abs(df['low'] - df['close'].shift())
+        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        df['atr'] = tr.rolling(window=14).mean()
+        
+        # 動量
+        df['momentum'] = df['close'].diff(10)
+        
+        # CCI
+        tp = (df['high'] + df['low'] + df['close']) / 3
+        df['cci'] = (tp - tp.rolling(window=20).mean()) / (0.015 * tp.rolling(window=20).std())
+        
+        # ADX
+        df['plus_dm'] = df['high'].diff()
+        df['minus_dm'] = -df['low'].diff()
+        df['plus_dm'] = df['plus_dm'].where(df['plus_dm'] > 0, 0)
+        df['minus_dm'] = df['minus_dm'].where(df['minus_dm'] > 0, 0)
+        
+        # 移動平均
+        df['sma5'] = df['close'].rolling(window=5).mean()
+        df['sma10'] = df['close'].rolling(window=10).mean()
+        df['sma20'] = df['close'].rolling(window=20).mean()
+        df['sma50'] = df['close'].rolling(window=50).mean()
+        
+        # 成交量指標
+        df['volume_sma'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_sma']
+        
+        df = df.fillna(method='bfill')
+        
+        logger.info(f"✓ Added technical indicators (total features: {len(df.columns) - 2})")
+        return df
+    
+    except Exception as e:
+        logger.error(f"Error adding indicators: {e}")
+        raise
+
+
+def prepare_sequences(X, y, lookback=60):
+    """整理序列"""
+    X_seq, y_seq = [], []
+    for i in range(len(X) - lookback):
+        X_seq.append(X[i:i+lookback])
+        y_seq.append(y[i+lookback])
+    return np.array(X_seq), np.array(y_seq)
 
 
 class LSTMModel(nn.Module):
@@ -150,13 +238,13 @@ def load_model_from_v1(symbol: str, config: dict) -> LSTMModel:
     v1_model_path = f'models/saved/{symbol}_model.pth'
     
     if not os.path.exists(v1_model_path):
-        logger.warning(f"v1 model not found: {v1_model_path}")
+        logger.warning(f"v1 model not found: {v1_model_path}, creating new model")
         return None
     
     try:
         model = LSTMModel(config)
         model.load_state_dict(torch.load(v1_model_path, map_location=device))
-        logger.info(f"✓ 已從 v1 加載模型: {v1_model_path}")
+        logger.info(f"✓ Loaded v1 model: {v1_model_path}")
         return model
     except Exception as e:
         logger.error(f"Failed to load v1 model: {e}")
@@ -164,44 +252,14 @@ def load_model_from_v1(symbol: str, config: dict) -> LSTMModel:
 
 
 def backup_v1_model(symbol: str):
-    """備份 v1 檔索"""
+    """備份 v1 模型"""
     v1_path = f'models/saved/{symbol}_model.pth'
     backup_path = f'models/backup_v1/{symbol}_model_v1.pth'
     
     if os.path.exists(v1_path):
         os.makedirs('models/backup_v1', exist_ok=True)
         shutil.copy(v1_path, backup_path)
-        logger.info(f"✓ v1 檔索已備份: {backup_path}")
-
-
-def fetch_data(symbol: str, limit: int = 5000):
-    """獲取數據"""
-    try:
-        import ccxt
-        from train_lstm_v1 import fetch_data as fetch_data_v1
-        return fetch_data_v1(symbol, '1h', limit)
-    except Exception as e:
-        logger.error(f"Error fetching data: {e}")
-        raise
-
-
-def add_technical_indicators(df: pd.DataFrame):
-    """添加技術指標"""
-    try:
-        from train_lstm_v1 import add_technical_indicators as add_indicators_v1
-        return add_indicators_v1(df)
-    except Exception as e:
-        logger.error(f"Error adding indicators: {e}")
-        raise
-
-
-def prepare_sequences(X, y, lookback=60):
-    """整理序列"""
-    X_seq, y_seq = [], []
-    for i in range(len(X) - lookback):
-        X_seq.append(X[i:i+lookback])
-        y_seq.append(y[i+lookback])
-    return np.array(X_seq), np.array(y_seq)
+        logger.info(f"✓ v1 model backed up: {backup_path}")
 
 
 def train_epoch(model, train_loader, optimizer, criterion, device):
@@ -254,8 +312,9 @@ def calculate_direction_accuracy(y_true, y_pred):
 
 
 def main():
-    global config
+    global logger
     
+    import argparse
     parser = argparse.ArgumentParser(description='LSTM Training v2 - Direction Accuracy Optimization')
     parser.add_argument('--symbol', type=str, default='SOL', help='Trading symbol')
     parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
@@ -268,13 +327,6 @@ def main():
     
     # 設定日誌
     setup_logging(args.symbol, version='v2')
-    config = load_config()
-    
-    # 覆蓋命令行參數
-    config['training']['epochs'] = args.epochs
-    config['training']['batch_size'] = args.batch_size
-    config['training']['learning_rate'] = args.lr
-    config['device'] = args.device
     
     logger.info('='*80)
     logger.info('LSTM MODEL TRAINING (V2 - Direction Accuracy Optimization)')
@@ -282,15 +334,22 @@ def main():
     logger.info(f"Symbol: {args.symbol}")
     logger.info(f"Device: {args.device}")
     logger.info(f"Load from v1: {args.load_v1}")
-    logger.info(f"Learning Rate: {args.lr} (lower for fine-tuning)")
-    logger.info(f"Epochs: {config['training']['epochs']}")
+    logger.info(f"Learning Rate: {args.lr}")
+    logger.info(f"Epochs: {args.epochs}")
+    
+    # 加載配置
+    config = DEFAULT_CONFIG.copy()
+    config['training']['epochs'] = args.epochs
+    config['training']['batch_size'] = args.batch_size
+    config['training']['learning_rate'] = args.lr
+    config['device'] = args.device
     
     # 備份 v1 模型
     backup_v1_model(args.symbol)
     
     # 1. 獲取數據
     logger.info("\n[1/5] Fetching data...")
-    df = fetch_data(args.symbol, limit=config['data']['limit'])
+    df = fetch_data(args.symbol, timeframe='1h', limit=config['data']['limit'])
     
     # 2. 添加技術指標
     logger.info("[2/5] Adding technical indicators...")
