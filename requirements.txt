@@ -1,0 +1,32 @@
+# Core Dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+plotly>=5.14.0
+
+# API & Data Fetching
+ccxt>=2.67.0
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
+pytz>=2023.3
+
+# Optional: For Groq API
+groq>=0.4.0
+
+# Optional: For Discord Bot
+discord.py>=2.3.0
+
+# Development
+ipython>=8.13.0
+jupyter>=1.0.0
