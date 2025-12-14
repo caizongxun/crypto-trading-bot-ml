@@ -7,6 +7,7 @@ Usage:
   python upload_to_hf.py
 
 Features:
+  - Auto-finds .env file in project root and parent directories
   - Reads HF_TOKEN from .env file
   - Uploads entire models/saved/ folder at once (avoids API rate limiting)
   - Uploads bias corrections and bot predictor
@@ -29,14 +30,53 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load .env file
-load_dotenv()
-
 # Configuration
 HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change to your HF username
 MODEL_DIR = "models/saved"
 CONFIG_FILE = "models/bias_corrections_v8.json"
 README_PATH = "README_HF.md"
+
+
+def find_env_file():
+    """
+    自動搜尋 .env 檔案
+    搜尋順序:
+    1. 當前工作目錄
+    2. 指令檔案所在目錄
+    3. 上層目錄
+    4. 使用者主目錄
+    """
+    search_paths = [
+        Path.cwd() / ".env",  # 當前工作目錄
+        Path(__file__).parent / ".env",  # 指令所在目錄
+        Path(__file__).parent.parent / ".env",  # 上層目錄
+        Path.home() / ".env",  # 使用者主目錄
+    ]
+    
+    for env_path in search_paths:
+        if env_path.exists():
+            logger.info(f"✓ Found .env at: {env_path}")
+            return str(env_path)
+    
+    logger.warning("⚠️  .env file not found in standard locations")
+    logger.info("Searching for .env in project root...")
+    
+    # 尋找 .env 在專案根目錄（向上搜尋直到找到 .git 或 README.md）
+    current = Path.cwd()
+    for _ in range(5):  # 向上搜尋最多 5 層
+        if (current / ".env").exists():
+            logger.info(f"✓ Found .env at: {current / '.env'}")
+            return str(current / ".env")
+        if (current / ".git").exists() or (current / "README.md").exists():
+            env_file = current / ".env"
+            logger.info(f"✓ Project root found at: {current}")
+            if env_file.exists():
+                return str(env_file)
+        current = current.parent
+        if current == current.parent:  # 到達根目錄
+            break
+    
+    return None
 
 
 def create_readme():
@@ -174,23 +214,41 @@ For issues and questions, please refer to the GitHub repository.
 def upload_to_hf():
     """Upload models to HuggingFace - Optimized for batch upload"""
     
-    # Check token from .env
+    # 自動搜尋並加載 .env
+    env_file = find_env_file()
+    if env_file:
+        logger.info(f"Loading environment from: {env_file}")
+        load_dotenv(env_file)
+    else:
+        logger.warning("⚠️  No .env file found, trying to load from system environment")
+        load_dotenv()  # 使用系統預設路徑
+    
+    # 檢查 token
     hf_token = os.getenv('HF_TOKEN')
     if not hf_token:
-        logger.error("✗ HF_TOKEN not found in .env file")
-        logger.error("   Add HF_TOKEN=your_token to your .env file")
+        logger.error("✗ HF_TOKEN not found!")
+        logger.error("")
+        logger.error("Please create .env file with:")
+        logger.error("  1. Copy .env.example to .env")
+        logger.error("  2. Add your HF_TOKEN to .env:")
+        logger.error("     HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
+        logger.error("")
+        logger.error("Searched locations:")
+        logger.error(f"  - {Path.cwd() / '.env'}")
+        logger.error(f"  - {Path(__file__).parent / '.env'}")
+        logger.error(f"  - {Path(__file__).parent.parent / '.env'}")
         return False
     
-    logger.info(f"✓ HF_TOKEN loaded from .env")
+    logger.info(f"✓ HF_TOKEN loaded: {hf_token[:20]}...")
     
-    # Create README
+    # 創建 README
     create_readme()
     
     try:
-        # Initialize API
+        # 初始化 API
         api = HfApi()
         
-        # Create repo
+        # 創建倉庫
         logger.info(f"Creating/accessing repo: {HF_REPO_ID}")
         try:
             repo_url = api.create_repo(
@@ -204,7 +262,7 @@ def upload_to_hf():
         except Exception as e:
             logger.info(f"ℹ️  Repo already exists: {str(e)[:80]}")
         
-        # Check if models directory exists
+        # 檢查模型目錄
         model_dir = Path(MODEL_DIR)
         if not model_dir.exists():
             logger.error(f"✗ Model directory not found: {MODEL_DIR}")
@@ -217,7 +275,7 @@ def upload_to_hf():
         
         logger.info(f"Found {len(model_files)} model files to upload")
         
-        # Upload entire models/saved folder at once (optimized for batch)
+        # 上傳整個 models/saved 資料夾
         logger.info(f"\n📤 Uploading entire models/saved folder...")
         logger.info(f"   Total files: {len(model_files)}")
         
@@ -251,9 +309,9 @@ def upload_to_hf():
                 logger.error(f"   ✗ Fallback also failed: {e2}")
                 return False
         
-        # Upload bias corrections
+        # 上傳偏差校正
         if os.path.exists(CONFIG_FILE):
-            logger.info(f"\n📄 Uploading bias corrections...")
+            logger.info(f"\n📋 Uploading bias corrections...")
             try:
                 api.upload_file(
                     path_or_fileobj=CONFIG_FILE,
@@ -269,7 +327,7 @@ def upload_to_hf():
         else:
             logger.warning(f"   ⚠️  bias_corrections_v8.json not found")
         
-        # Upload bot predictor
+        # 上傳 bot predictor
         logger.info(f"\n🤖 Uploading bot predictor...")
         try:
             api.upload_file(
@@ -284,7 +342,7 @@ def upload_to_hf():
         except Exception as e:
             logger.warning(f"   ⚠️  Could not upload bot_predictor: {e}")
         
-        # Upload README
+        # 上傳 README
         logger.info(f"\n📖 Uploading README...")
         try:
             api.upload_file(
@@ -318,7 +376,6 @@ if __name__ == '__main__':
     logger.info("="*60)
     logger.info("HuggingFace Upload Tool - V8 Models (Batch Optimized)")
     logger.info("="*60)
-    logger.info(f"Reading from: .env")
     
     success = upload_to_hf()
     sys.exit(0 if success else 1)
