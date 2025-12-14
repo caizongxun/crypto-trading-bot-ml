@@ -2,10 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 訓練結果可視化器
-比較 v1 和 v2 的訓練結果，統計指標
+比較 v1、v2 和 v3 的訓練結果，統計指標
 
 用法:
-  python visualize_results.py                    # 比較所有幣種 v1 vs v2
+  python visualize_results.py                    # 比較所有幣種 v1 vs v2 vs v3
   python visualize_results.py --symbol SOL      # 統計 SOL 的訓練結果
   python visualize_results.py --compare         # 生成比較表格
 """
@@ -38,9 +38,10 @@ class ResultsVisualizer:
         self.plots_dir = Path('plots')
         self.plots_dir.mkdir(exist_ok=True)
         
-        # 曨取最新的結果
+        # 蒐取最新的結果
         self.v1_results = {}
         self.v2_results = {}
+        self.v3_results = {}
         self._load_results()
     
     def _load_results(self):
@@ -49,6 +50,7 @@ class ResultsVisualizer:
             print(f"⚠ {self.results_dir} 不存在")
             return
         
+        # 載入 V1
         for file in self.results_dir.glob('*_results.json'):
             try:
                 with open(file, 'r', encoding='utf-8') as f:
@@ -58,6 +60,7 @@ class ResultsVisualizer:
             except:
                 pass
         
+        # 載入 V2
         for file in self.results_dir.glob('*_results_v2.json'):
             try:
                 with open(file, 'r', encoding='utf-8') as f:
@@ -67,19 +70,30 @@ class ResultsVisualizer:
             except:
                 pass
         
-        print(f"✓ 加載結果: {len(self.v1_results)} v1, {len(self.v2_results)} v2")
+        # 載入 V3
+        for file in self.results_dir.glob('*_results_v3.json'):
+            try:
+                with open(file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                symbol = file.stem.replace('_results_v3', '')
+                self.v3_results[symbol] = data
+            except:
+                pass
+        
+        print(f"✓ 載入結果: {len(self.v1_results)} v1, {len(self.v2_results)} v2, {len(self.v3_results)} v3")
     
     def plot_single_symbol(self, symbol: str):
-        """綘先單個幣種的 v1 vs v2 比較"""
+        """針對單個幣種的 v1 vs v2 vs v3 比較"""
         v1 = self.v1_results.get(symbol)
         v2 = self.v2_results.get(symbol)
+        v3 = self.v3_results.get(symbol)
         
-        if not v1 and not v2:
-            print(f"❌ {symbol} 沒有結果檔案")
+        if not v1 and not v2 and not v3:
+            print(f"✗ {symbol} 沒有結果檔案")
             return
         
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle(f'{symbol} - V1 vs V2 比較', fontsize=16, fontweight='bold')
+        fig.suptitle(f'{symbol} - V1 vs V2 vs V3 比較', fontsize=16, fontweight='bold')
         
         # MAE 比較
         ax = axes[0, 0]
@@ -95,6 +109,10 @@ class ResultsVisualizer:
             versions.append('V2')
             maes.append(v2.get('mae', 0))
             colors.append('#ff7f0e')
+        if v3:
+            versions.append('V3')
+            maes.append(v3.get('mae', 0))
+            colors.append('#2ca02c')
         
         ax.bar(versions, maes, color=colors, alpha=0.7, edgecolor='black')
         ax.set_ylabel('MAE (USD)', fontsize=12)
@@ -111,12 +129,16 @@ class ResultsVisualizer:
         
         if v1:
             versions.append('V1')
-            mapes.append(v1.get('mape', 0) * 100)  # 轉換為百分比
+            mapes.append(v1.get('mape', 0) * 100)
             colors.append('#1f77b4')
         if v2:
             versions.append('V2')
             mapes.append(v2.get('mape', 0) * 100)
             colors.append('#ff7f0e')
+        if v3:
+            versions.append('V3')
+            mapes.append(v3.get('mape', 0) * 100)
+            colors.append('#2ca02c')
         
         ax.bar(versions, mapes, color=colors, alpha=0.7, edgecolor='black')
         ax.set_ylabel('MAPE (%)', fontsize=12)
@@ -133,12 +155,16 @@ class ResultsVisualizer:
         
         if v1:
             versions.append('V1')
-            accuracies.append(v1.get('direction_accuracy', 0) * 100)  # 轉換為百分比
+            accuracies.append(v1.get('direction_accuracy', 0) * 100)
             colors.append('#1f77b4')
         if v2:
             versions.append('V2')
             accuracies.append(v2.get('direction_accuracy', 0) * 100)
             colors.append('#ff7f0e')
+        if v3:
+            versions.append('V3')
+            accuracies.append(v3.get('direction_accuracy', 0) * 100)
+            colors.append('#2ca02c')
         
         ax.bar(versions, accuracies, color=colors, alpha=0.7, edgecolor='black')
         ax.set_ylabel('準確度 (%)', fontsize=12)
@@ -164,6 +190,10 @@ class ResultsVisualizer:
             versions.append('V2')
             rmses.append(v2.get('rmse', 0))
             colors.append('#ff7f0e')
+        if v3:
+            versions.append('V3')
+            rmses.append(v3.get('rmse', 0))
+            colors.append('#2ca02c')
         
         ax.bar(versions, rmses, color=colors, alpha=0.7, edgecolor='black')
         ax.set_ylabel('RMSE (USD)', fontsize=12)
@@ -173,40 +203,43 @@ class ResultsVisualizer:
             ax.text(i, v, f'{v:.6f}', ha='center', va='bottom', fontweight='bold')
         
         plt.tight_layout()
-        output_file = self.plots_dir / f'{symbol}_v1_vs_v2.png'
+        output_file = self.plots_dir / f'{symbol}_v1_vs_v2_vs_v3.png'
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
         print(f"✓ 已保存: {output_file}")
         plt.close()
     
     def plot_all_comparison(self):
-        """綘全部幣種的比較檔索"""
-        all_symbols = set(self.v1_results.keys()) | set(self.v2_results.keys())
+        """針對全部幣種的比較檔索"""
+        all_symbols = set(self.v1_results.keys()) | set(self.v2_results.keys()) | set(self.v3_results.keys())
         if not all_symbols:
-            print("❌ 沒有結果檔案")
+            print("✗ 沒有結果檔案")
             return
         
         all_symbols = sorted(all_symbols)
         
-        # 技貼揄敗凍他了一丫形容詹了昇障穎
-        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-        fig.suptitle('所有幣種 - V1 vs V2 比較', fontsize=16, fontweight='bold')
+        # 技貼晦暗他了一乙形容載了昇障礎
+        fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+        fig.suptitle('所有幣種 - V1 vs V2 vs V3 比較', fontsize=16, fontweight='bold')
         
         # MAE 比較
         ax = axes[0, 0]
         v1_maes = []
         v2_maes = []
+        v3_maes = []
         labels = []
         
         for symbol in all_symbols:
             labels.append(symbol)
             v1_maes.append(self.v1_results.get(symbol, {}).get('mae', 0))
             v2_maes.append(self.v2_results.get(symbol, {}).get('mae', 0))
+            v3_maes.append(self.v3_results.get(symbol, {}).get('mae', 0))
         
         x = np.arange(len(labels))
-        width = 0.35
+        width = 0.25
         
-        ax.bar(x - width/2, v1_maes, width, label='V1', alpha=0.8, color='#1f77b4')
-        ax.bar(x + width/2, v2_maes, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x - width, v1_maes, width, label='V1', alpha=0.8, color='#1f77b4')
+        ax.bar(x, v2_maes, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x + width, v3_maes, width, label='V3', alpha=0.8, color='#2ca02c')
         ax.set_xlabel('幣種', fontsize=12)
         ax.set_ylabel('MAE (USD)', fontsize=12)
         ax.set_title('MAE 比較', fontsize=12)
@@ -219,13 +252,16 @@ class ResultsVisualizer:
         ax = axes[0, 1]
         v1_mapes = []
         v2_mapes = []
+        v3_mapes = []
         
         for symbol in all_symbols:
             v1_mapes.append(self.v1_results.get(symbol, {}).get('mape', 0) * 100)
             v2_mapes.append(self.v2_results.get(symbol, {}).get('mape', 0) * 100)
+            v3_mapes.append(self.v3_results.get(symbol, {}).get('mape', 0) * 100)
         
-        ax.bar(x - width/2, v1_mapes, width, label='V1', alpha=0.8, color='#1f77b4')
-        ax.bar(x + width/2, v2_mapes, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x - width, v1_mapes, width, label='V1', alpha=0.8, color='#1f77b4')
+        ax.bar(x, v2_mapes, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x + width, v3_mapes, width, label='V3', alpha=0.8, color='#2ca02c')
         ax.set_xlabel('幣種', fontsize=12)
         ax.set_ylabel('MAPE (%)', fontsize=12)
         ax.set_title('MAPE 比較', fontsize=12)
@@ -238,13 +274,16 @@ class ResultsVisualizer:
         ax = axes[1, 0]
         v1_accs = []
         v2_accs = []
+        v3_accs = []
         
         for symbol in all_symbols:
             v1_accs.append(self.v1_results.get(symbol, {}).get('direction_accuracy', 0) * 100)
             v2_accs.append(self.v2_results.get(symbol, {}).get('direction_accuracy', 0) * 100)
+            v3_accs.append(self.v3_results.get(symbol, {}).get('direction_accuracy', 0) * 100)
         
-        ax.bar(x - width/2, v1_accs, width, label='V1', alpha=0.8, color='#1f77b4')
-        ax.bar(x + width/2, v2_accs, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x - width, v1_accs, width, label='V1', alpha=0.8, color='#1f77b4')
+        ax.bar(x, v2_accs, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x + width, v3_accs, width, label='V3', alpha=0.8, color='#2ca02c')
         ax.axhline(y=50, color='r', linestyle='--', alpha=0.5, label='Random')
         ax.set_xlabel('幣種', fontsize=12)
         ax.set_ylabel('準確度 (%)', fontsize=12)
@@ -259,13 +298,16 @@ class ResultsVisualizer:
         ax = axes[1, 1]
         v1_rmses = []
         v2_rmses = []
+        v3_rmses = []
         
         for symbol in all_symbols:
             v1_rmses.append(self.v1_results.get(symbol, {}).get('rmse', 0))
             v2_rmses.append(self.v2_results.get(symbol, {}).get('rmse', 0))
+            v3_rmses.append(self.v3_results.get(symbol, {}).get('rmse', 0))
         
-        ax.bar(x - width/2, v1_rmses, width, label='V1', alpha=0.8, color='#1f77b4')
-        ax.bar(x + width/2, v2_rmses, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x - width, v1_rmses, width, label='V1', alpha=0.8, color='#1f77b4')
+        ax.bar(x, v2_rmses, width, label='V2', alpha=0.8, color='#ff7f0e')
+        ax.bar(x + width, v3_rmses, width, label='V3', alpha=0.8, color='#2ca02c')
         ax.set_xlabel('幣種', fontsize=12)
         ax.set_ylabel('RMSE (USD)', fontsize=12)
         ax.set_title('RMSE 比較', fontsize=12)
@@ -275,43 +317,44 @@ class ResultsVisualizer:
         ax.grid(axis='y', alpha=0.3)
         
         plt.tight_layout()
-        output_file = self.plots_dir / 'all_symbols_comparison.png'
+        output_file = self.plots_dir / 'all_symbols_comparison_v1_v2_v3.png'
         plt.savefig(output_file, dpi=150, bbox_inches='tight')
         print(f"✓ 已保存: {output_file}")
         plt.close()
     
     def generate_summary_table(self):
         """產生总结表格"""
-        all_symbols = sorted(set(self.v1_results.keys()) | set(self.v2_results.keys()))
+        all_symbols = sorted(set(self.v1_results.keys()) | set(self.v2_results.keys()) | set(self.v3_results.keys()))
         
         data = []
         for symbol in all_symbols:
             v1 = self.v1_results.get(symbol, {})
             v2 = self.v2_results.get(symbol, {})
+            v3 = self.v3_results.get(symbol, {})
             
             row = {
                 '幣種': symbol,
                 'V1 MAE': f"{v1.get('mae', 0):.6f}",
                 'V2 MAE': f"{v2.get('mae', 0):.6f}",
-                'MAE 提升': f"{((v1.get('mae', 0) - v2.get('mae', 0)) / max(v1.get('mae', 1e-6), 1e-6) * 100):.1f}%",
+                'V3 MAE': f"{v3.get('mae', 0):.6f}",
                 'V1 準確': f"{v1.get('direction_accuracy', 0)*100:.2f}%",
                 'V2 準確': f"{v2.get('direction_accuracy', 0)*100:.2f}%",
-                '準確提升': f"{((v2.get('direction_accuracy', 0) - v1.get('direction_accuracy', 0)) * 100):.2f}%",
+                'V3 準確': f"{v3.get('direction_accuracy', 0)*100:.2f}%",
             }
             data.append(row)
         
         df = pd.DataFrame(data)
         
-        output_file = self.plots_dir / 'comparison_summary.csv'
+        output_file = self.plots_dir / 'comparison_summary_v1_v2_v3.csv'
         df.to_csv(output_file, index=False, encoding='utf-8-sig')
         print(f"✓ 已保存: {output_file}")
         
         # 也打印表格
-        print("\n" + "="*100)
-        print("訓練結果总结")
-        print("="*100)
+        print("\n" + "="*120)
+        print("訓練結果總結")
+        print("="*120)
         print(df.to_string(index=False))
-        print("="*100)
+        print("="*120)
     
     def run(self, symbol: str = None, compare: bool = False):
         """運行可視化"""
@@ -328,8 +371,9 @@ class ResultsVisualizer:
         print(f"\n引總:")
         print(f"  - V1 結果: {len(self.v1_results)} 個幣種")
         print(f"  - V2 結果: {len(self.v2_results)} 個幣種")
+        print(f"  - V3 結果: {len(self.v3_results)} 個幣種")
         print(f"  - 圖表位置: plots/")
-        print(f"  - 总结表: plots/comparison_summary.csv")
+        print(f"  - 總结表: plots/comparison_summary_v1_v2_v3.csv")
 
 
 def main():
