@@ -6,23 +6,34 @@ Download Models from HuggingFace Hub for VM Deployment
 Usage:
   python download_from_hf.py
 
+Features:
+  - Reads HF_TOKEN from .env file (optional, for private repos)
+  - Downloads entire models/ folder
+  - Downloads bias_corrections_v8.json
+  - Downloads bot_predictor.py
+
 Sets up:
   - models/saved/ with all .pth model files
   - bias_corrections_v8.json
   - bot_predictor.py
 
 Requires:
+  - .env file with HF_TOKEN (optional, unless repo is private)
   - huggingface_hub package
 """
 
 import os
 import sys
 from pathlib import Path
-from huggingface_hub import hf_hub_download, list_repo_files
+from huggingface_hub import hf_hub_download, list_repo_files, snapshot_download
+from dotenv import load_dotenv
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Load .env file
+load_dotenv()
 
 # Configuration
 HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change if needed
@@ -32,55 +43,71 @@ MODEL_DIR = "models/saved"
 def ensure_directories():
     """Ensure required directories exist"""
     Path(MODEL_DIR).mkdir(parents=True, exist_ok=True)
-    logger.info(f"Ensured directory: {MODEL_DIR}")
+    logger.info(f"✓ Ensured directory: {MODEL_DIR}")
 
 
 def download_models_from_hf():
     """Download all model files from HuggingFace"""
     
+    hf_token = os.getenv('HF_TOKEN', None)  # Optional for public repos
+    
     try:
-        logger.info(f"\nFetching file list from {HF_REPO_ID}...")
+        logger.info(f"\n📤 Downloading models from {HF_REPO_ID}...")
         
         # Get all files in repo
         files = list_repo_files(
             repo_id=HF_REPO_ID,
-            repo_type="model"
+            repo_type="model",
+            token=hf_token
         )
         
         # Filter model files
         model_files = [f for f in files if f.startswith('models/') and f.endswith('.pth')]
         
         if not model_files:
-            logger.warning("No model files found in repository")
+            logger.warning("⚠️  No model files found in repository")
             return False
         
         logger.info(f"Found {len(model_files)} model files")
         
-        # Download each model
-        logger.info(f"\nDownloading models...")
-        for model_file in model_files:
-            file_name = os.path.basename(model_file)
-            save_path = os.path.join(MODEL_DIR, file_name)
+        # Download entire models folder using snapshot_download (much faster)
+        logger.info(f"\n📥 Downloading entire models/ folder...")
+        
+        try:
+            snapshot_download(
+                repo_id=HF_REPO_ID,
+                repo_type="model",
+                allow_patterns=["models/*.pth"],  # Only .pth files
+                local_dir=".",
+                token=hf_token
+            )
+            logger.info(f"   ✓ Models downloaded successfully")
+        except Exception as e:
+            logger.warning(f"   ⚠️  Snapshot download failed: {e}")
+            logger.info(f"   Falling back to individual downloads...")
             
-            logger.info(f"  Downloading {file_name}...")
-            
-            try:
-                hf_hub_download(
-                    repo_id=HF_REPO_ID,
-                    filename=model_file,
-                    repo_type="model",
-                    local_dir=".",
-                    force_download=False
-                )
-                logger.info(f"    ✓ {file_name}")
-            except Exception as e:
-                logger.error(f"    ❌ Failed to download {file_name}: {e}")
-                return False
+            # Fallback: Download individual files
+            for model_file in model_files:
+                file_name = os.path.basename(model_file)
+                logger.info(f"   Downloading {file_name}...")
+                
+                try:
+                    hf_hub_download(
+                        repo_id=HF_REPO_ID,
+                        filename=model_file,
+                        repo_type="model",
+                        local_dir=".",
+                        token=hf_token
+                    )
+                    logger.info(f"      ✓ {file_name}")
+                except Exception as e:
+                    logger.error(f"      ✗ Failed: {e}")
+                    return False
         
         return True
     
     except Exception as e:
-        logger.error(f"Error listing repository: {e}")
+        logger.error(f"✗ Error listing repository: {e}")
         return False
 
 
@@ -92,7 +119,9 @@ def download_config_files():
         ('bot_predictor.py', 'bot_predictor.py'),
     ]
     
-    logger.info(f"\nDownloading configuration files...")
+    logger.info(f"\n📄 Downloading configuration files...")
+    
+    hf_token = os.getenv('HF_TOKEN', None)
     
     for remote_file, local_file in config_files:
         try:
@@ -103,13 +132,13 @@ def download_config_files():
                 filename=remote_file,
                 repo_type="model",
                 local_dir=".",
-                force_download=False
+                token=hf_token
             )
             
             logger.info(f"    ✓ {local_file}")
         
         except Exception as e:
-            logger.warning(f"    ❌ Could not download {remote_file}: {e}")
+            logger.warning(f"    ⚠️  Could not download {remote_file}: {e}")
             logger.warning(f"       You may need to download it manually")
     
     return True
@@ -118,32 +147,36 @@ def download_config_files():
 def verify_downloads():
     """Verify all downloads are complete"""
     
-    logger.info(f"\nVerifying downloads...")
+    logger.info(f"\n🔍 Verifying downloads...")
     
     # Check model directory
     model_dir_path = Path(MODEL_DIR)
     if not model_dir_path.exists():
-        logger.error(f"Model directory not found: {MODEL_DIR}")
+        logger.error(f"✗ Model directory not found: {MODEL_DIR}")
         return False
     
     model_files = list(model_dir_path.glob('*.pth'))
     if not model_files:
-        logger.error(f"No model files found in {MODEL_DIR}")
+        logger.error(f"✗ No model files found in {MODEL_DIR}")
         return False
     
     logger.info(f"  ✓ Found {len(model_files)} model files")
+    for mf in model_files[:3]:
+        logger.info(f"     - {mf.name}")
+    if len(model_files) > 3:
+        logger.info(f"     ... and {len(model_files) - 3} more")
     
     # Check config file
     if os.path.exists('bias_corrections_v8.json'):
         logger.info(f"  ✓ bias_corrections_v8.json found")
     else:
-        logger.warning(f"  ❌ bias_corrections_v8.json not found (will use defaults)")
+        logger.warning(f"  ⚠️  bias_corrections_v8.json not found (will use defaults)")
     
     # Check bot predictor
     if os.path.exists('bot_predictor.py'):
         logger.info(f"  ✓ bot_predictor.py found")
     else:
-        logger.warning(f"  ❌ bot_predictor.py not found (required for Discord bot)")
+        logger.warning(f"  ⚠️  bot_predictor.py not found (required for Discord bot)")
     
     return len(model_files) > 0
 
@@ -156,6 +189,12 @@ def main():
     logger.info("="*60)
     logger.info(f"Repository: {HF_REPO_ID}")
     logger.info(f"Target Directory: {MODEL_DIR}")
+    
+    hf_token = os.getenv('HF_TOKEN', None)
+    if hf_token:
+        logger.info(f"✓ HF_TOKEN loaded from .env")
+    else:
+        logger.info(f"ℹ️  No HF_TOKEN found (OK for public repos)")
     
     # Step 1: Ensure directories
     ensure_directories()
@@ -175,8 +214,9 @@ def main():
         logger.info("="*60)
         logger.info("\nYou can now:")
         logger.info("  1. Use bot_predictor.py with your Discord bot")
-        logger.info("  2. Run: python bot_predictor.py to test predictions")
+        logger.info("  2. Run: python -c 'from bot_predictor import BotPredictor; bot = BotPredictor(); print(bot.predict(\"BTC\"))' to test")
         logger.info("  3. Train new models: python train_v8_models.py")
+        logger.info("="*60)
         return True
     else:
         logger.error("\nDownload verification failed")
