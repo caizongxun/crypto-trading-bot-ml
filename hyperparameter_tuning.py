@@ -1,18 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-超參數調整工具 - 自動找出最佳訓練配置
+Hyperparameter Tuning Tool - Auto find best V8 model configuration
 
-用法:
-  python hyperparameter_tuning.py --symbol SOL                    # 核心調優
-  python hyperparameter_tuning.py --symbol SOL --fast             # 快速模式 (模範減少)
-  python hyperparameter_tuning.py --symbol SOL --comprehensive    # 全面模式 (嘗試所有組合)
+Usage:
+  python hyperparameter_tuning.py --symbol SOL                    # Core mode
+  python hyperparameter_tuning.py --symbol SOL --fast             # Fast mode (reduced combos)
+  python hyperparameter_tuning.py --symbol SOL --comprehensive    # Full mode (all combos)
 
-調整範疇:
+Tuning Range:
   - hidden_size: [64, 128, 256]
   - num_layers: [1, 2, 3]
   - dropout: [0.1, 0.3, 0.5]
-  - learning_rate: [0.0001, 0.001, 0.01]
+  - learning_rate: [0.001, 0.005, 0.01]
   - batch_size: [16, 32, 64]
 """
 
@@ -41,12 +41,11 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 logger = None
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# 基础配置
 BASE_CONFIG = {
     'input_size': 44,
     'lookback': 60,
-    'epochs': 100,  # 調整時用較短的 epochs
-    'early_stop_patience': 15,
+    'epochs': 80,
+    'early_stop_patience': 12,
 }
 
 
@@ -63,12 +62,11 @@ def setup_logging():
 
 
 def fetch_training_data(symbol: str, limit: int = 1500):
-    """接取訓練數據"""
     try:
         exchange = ccxt.binance({'enableRateLimit': True})
         symbol_pair = f"{symbol}/USDT"
         
-        logger.info(f"    📊 接取 {limit} 根蠟燭...")
+        logger.info(f"    Fetching {limit} candles for {symbol}...")
         ohlcv = exchange.fetch_ohlcv(symbol_pair, '1h', limit=limit)
         
         df = pd.DataFrame(
@@ -82,12 +80,11 @@ def fetch_training_data(symbol: str, limit: int = 1500):
         return df
     
     except Exception as e:
-        logger.error(f"    ✗ 接取數據失敗: {e}")
+        logger.error(f"    Error fetching data: {e}")
         return None
 
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """添加 44 個技術指標"""
     try:
         df['high-low'] = df['high'] - df['low']
         df['close-open'] = df['close'] - df['open']
@@ -132,11 +129,16 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
         df = df.ffill()
+        df = df.bfill()
+        
+        # Handle NaN/Inf
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.fillna(method='ffill').fillna(method='bfill')
         
         return df
     
     except Exception as e:
-        logger.error(f"    ✗ 添加技術指標失敗: {e}")
+        logger.error(f"    Error adding indicators: {e}")
         return None
 
 
@@ -200,10 +202,8 @@ class EarlyStopping:
 
 
 def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
-    """訓練並評估模型"""
     X_train, y_train, X_val, y_val, X_test, y_test, scaler_y = data
     
-    # 創建 DataLoader
     train_dataset = TensorDataset(
         torch.tensor(X_train, dtype=torch.float32),
         torch.tensor(y_train, dtype=torch.float32)
@@ -216,7 +216,6 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
     )
     val_loader = DataLoader(val_dataset, batch_size=config['batch_size'])
     
-    # 創建模型
     model = RegressionLSTM(
         input_size=BASE_CONFIG['input_size'],
         hidden_size=config['hidden_size'],
@@ -226,7 +225,6 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
     )
     model.to(device)
     
-    # 損失函數和優化器
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -236,7 +234,6 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
     
     early_stopping = EarlyStopping(patience=BASE_CONFIG['early_stop_patience'])
     
-    # 訓練
     best_val_loss = float('inf')
     for epoch in range(BASE_CONFIG['epochs']):
         model.train()
@@ -247,15 +244,23 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
             
             optimizer.zero_grad()
             predictions = model(X_batch)
+            
+            if torch.isnan(predictions).any():
+                raise ValueError("NaN detected in predictions")
+            
             loss = criterion(predictions, y_batch)
+            
+            if torch.isnan(loss):
+                raise ValueError("NaN detected in loss")
+            
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             train_loss += loss.item()
         
         train_loss /= len(train_loader)
         
-        # 驗證
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -275,7 +280,6 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
         if early_stopping(val_loss):
             break
     
-    # 測試
     model.eval()
     with torch.no_grad():
         test_prices = []
@@ -287,11 +291,9 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
             test_prices.extend(price.cpu().numpy().flatten())
             test_trues.extend(y_test[i:i+32])
     
-    # 反標準化
     test_prices_inverse = scaler_y.inverse_transform(np.array(test_prices).reshape(-1, 1)).flatten()
     test_trues_inverse = scaler_y.inverse_transform(np.array(test_trues).reshape(-1, 1)).flatten()
     
-    # 計算指標
     mae = mean_absolute_error(test_trues_inverse, test_prices_inverse)
     mape = mean_absolute_percentage_error(test_trues_inverse, test_prices_inverse)
     rmse = np.sqrt(mean_squared_error(test_trues_inverse, test_prices_inverse))
@@ -305,8 +307,7 @@ def train_and_evaluate(symbol: str, config: dict, data: tuple) -> dict:
 
 
 def prepare_data(symbol: str):
-    """準備訓練數據"""
-    logger.info(f"\n  📐 準備数据...")
+    logger.info("\n  Preparing data...")
     
     df = fetch_training_data(symbol)
     if df is None:
@@ -320,12 +321,15 @@ def prepare_data(symbol: str):
     X = df[feature_cols].values
     y = df['close'].values
     
+    # Handle NaN/Inf before scaling
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
+    
     scaler_X = MinMaxScaler()
     scaler_y = MinMaxScaler()
     X_scaled = scaler_X.fit_transform(X)
     y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
     
-    # 确保特征数为 44
     if X_scaled.shape[1] > 44:
         X_scaled = X_scaled[:, :44]
     elif X_scaled.shape[1] < 44:
@@ -349,20 +353,16 @@ def prepare_data(symbol: str):
 
 
 def hyperparameter_tuning(symbol: str, mode='core'):
-    """超參數調整"""
     logger.info(f"\n{'='*60}")
-    logger.info(f"📋 超參數調整 - {symbol} ({mode.upper()})")
+    logger.info(f"Hyperparameter Tuning - {symbol} (MODE: {mode.upper()})")
     logger.info(f"{'='*60}")
     
-    # 準備數據
     data = prepare_data(symbol)
     if data is None:
-        logger.error("\n  ✗ 數據準備失敗")
+        logger.error("\n  Error: Data preparation failed")
         return None
     
-    # 定義测試空間
     if mode == 'fast':
-        # 快速模式 - 简少的組合
         hidden_sizes = [128]
         num_layers_list = [2]
         dropouts = [0.3]
@@ -370,24 +370,21 @@ def hyperparameter_tuning(symbol: str, mode='core'):
         batch_sizes = [32]
     
     elif mode == 'core':
-        # 核心模式 - 擇選最可能的組合
         hidden_sizes = [64, 128, 256]
         num_layers_list = [1, 2, 3]
         dropouts = [0.1, 0.3, 0.5]
-        learning_rates = [0.0001, 0.001, 0.01]
+        learning_rates = [0.001, 0.005, 0.01]
         batch_sizes = [16, 32, 64]
     
-    else:  # comprehensive
-        # 全面模式 - 所有組合
+    else:
         hidden_sizes = [64, 128, 192, 256]
         num_layers_list = [1, 2, 3, 4]
         dropouts = [0.1, 0.2, 0.3, 0.4, 0.5]
-        learning_rates = [0.00001, 0.0001, 0.001, 0.01]
-        batch_sizes = [8, 16, 32, 64, 128]
+        learning_rates = [0.001, 0.003, 0.005, 0.01]
+        batch_sizes = [8, 16, 32, 64]
     
-    # 估算總數
     total_combinations = len(hidden_sizes) * len(num_layers_list) * len(dropouts) * len(learning_rates) * len(batch_sizes)
-    logger.info(f"\n  📋 測試組合: {total_combinations} 個\n")
+    logger.info(f"\n  Total combinations: {total_combinations}\n")
     
     results = []
     count = 0
@@ -404,53 +401,48 @@ def hyperparameter_tuning(symbol: str, mode='core'):
             'batch_size': batch_size,
         }
         
-        logger.info(f"  [{count}/{total_combinations}] HS={hidden_size} | NL={num_layers} | DO={dropout} | LR={lr} | BS={batch_size}")
+        logger.info(f"  [{count}/{total_combinations}] HS={hidden_size} NL={num_layers} DO={dropout:.1f} LR={lr} BS={batch_size}")
         
         try:
             result = train_and_evaluate(symbol, config, data)
             result.update(config)
             results.append(result)
             
-            logger.info(f"         MAE={result['mae']:.6f} | MAPE={result['mape']:.4f}% | RMSE={result['rmse']:.6f}")
+            logger.info(f"         MAE={result['mae']:.6f} MAPE={result['mape']:.4f}% RMSE={result['rmse']:.6f}")
         
         except Exception as e:
-            logger.warning(f"         ✗ 訓練失敗: {e}")
+            logger.warning(f"         Error: {str(e)[:50]}")
             continue
     
     if not results:
-        logger.error("\n  ✗ 估伐失敗")
+        logger.error("\n  Error: No successful trainings")
         return None
     
-    # 排序結果
     results_df = pd.DataFrame(results)
     results_df = results_df.sort_values('mae').reset_index(drop=True)
     
-    # 輸出最佳配置
     logger.info(f"\n\n{'='*60}")
-    logger.info(f"🌟 最佳配置 (Top 5)")
+    logger.info(f"BEST CONFIGURATIONS (Top 5)")
     logger.info(f"{'='*60}\n")
     
     for i, row in results_df.head(5).iterrows():
         logger.info(f"\n#{i+1} - MAE: {row['mae']:.6f}")
-        logger.info(f"  hidden_size={int(row['hidden_size'])} | num_layers={int(row['num_layers'])}")
-        logger.info(f"  dropout={row['dropout']:.1f} | learning_rate={row['learning_rate']}")
+        logger.info(f"  hidden_size={int(row['hidden_size'])} num_layers={int(row['num_layers'])}")
+        logger.info(f"  dropout={row['dropout']:.1f} learning_rate={row['learning_rate']}")
         logger.info(f"  batch_size={int(row['batch_size'])}")
-        logger.info(f"  MAPE={row['mape']:.4f}% | RMSE={row['rmse']:.6f}")
+        logger.info(f"  MAPE={row['mape']:.4f}% RMSE={row['rmse']:.6f}")
     
-    # 保存結果
     results_file = f'tuning_results_{symbol}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     results_df.to_csv(results_file, index=False)
-    logger.info(f"\n\n✓ 結果已保存: {results_file}")
+    logger.info(f"\n\nResults saved: {results_file}")
     
-    # 輸出最佳配置 JSON
     best_config = results_df.iloc[0].to_dict()
     config_file = f'best_config_{symbol}.json'
     
     with open(config_file, 'w') as f:
         json.dump(best_config, f, indent=2, default=str)
     
-    logger.info(f"✓ 最佳配置已保存: {config_file}")
-    logger.info(f"\n{repr(best_config)}")
+    logger.info(f"Best config saved: {config_file}")
     
     return best_config
 
@@ -460,19 +452,19 @@ def main():
     
     setup_logging()
     
-    parser = argparse.ArgumentParser(description='超參數調整工具')
-    parser.add_argument('--symbol', type=str, required=True, help='幣種符號')
-    parser.add_argument('--fast', action='store_true', help='快速模式')
-    parser.add_argument('--comprehensive', action='store_true', help='全面模式')
+    parser = argparse.ArgumentParser(description='Hyperparameter Tuning Tool')
+    parser.add_argument('--symbol', type=str, required=True, help='Crypto symbol')
+    parser.add_argument('--fast', action='store_true', help='Fast mode')
+    parser.add_argument('--comprehensive', action='store_true', help='Comprehensive mode')
     args = parser.parse_args()
     
     mode = 'fast' if args.fast else ('comprehensive' if args.comprehensive else 'core')
     
     logger.info('\n' + '='*60)
-    logger.info('📋 超參數調整工具')
+    logger.info('HYPERPARAMETER TUNING TOOL')
     logger.info('='*60)
-    logger.info(f"\n💻 設備: {device}")
-    logger.info(f"👀 模式: {mode.upper()}")
+    logger.info(f"\nDevice: {device}")
+    logger.info(f"Mode: {mode.upper()}")
     
     hyperparameter_tuning(args.symbol.upper(), mode)
 
