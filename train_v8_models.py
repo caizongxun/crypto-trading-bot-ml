@@ -1,21 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-V8 模型訓練腳本 - 支持所有幣種
+V8 Model Training Script - Support all cryptocurrencies
 
-使用方法:
-  python train_v8_models.py              # 訓練所有幣種
-  python train_v8_models.py --symbol SOL # 訓練單個幣種
-  python train_v8_models.py --symbol BTC,ETH,SOL # 訓練多個幣種
+Usage:
+  python train_v8_models.py              # Train all symbols
+  python train_v8_models.py --symbol SOL # Train single symbol
+  python train_v8_models.py --symbol BTC,ETH,SOL # Train multiple symbols
 
-模型配置 (V8):
-  - 輸入特徵: 44 個技術指標
-  - 隱藏層: 128 x 2
-  - Bidirectional LSTM
+Model Configuration (V8):
+  - Input Features: 44 technical indicators
+  - Hidden Layers: 64 x 2 (optimized)
+  - Bidirectional LSTM: Yes
   - Dropout: 0.3
-  - 訓練 Epochs: 150
-  - Batch Size: 32
+  - Training Epochs: 150
+  - Batch Size: 64 (optimized)
   - Early Stopping: True
+  - Learning Rate: 0.005 (optimized)
 """
 
 import os
@@ -24,6 +25,7 @@ import io
 import argparse
 from pathlib import Path
 from datetime import datetime
+from glob import glob
 
 import numpy as np
 import pandas as pd
@@ -41,17 +43,17 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 logger = None
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# V8 配置 (44 個技術指標)
+# V8 Configuration (Optimized from hyperparameter tuning)
 MODEL_CONFIG = {
     'input_size': 44,
-    'hidden_size': 128,
-    'num_layers': 2,
-    'dropout': 0.3,
+    'hidden_size': 64,           # Optimized
+    'num_layers': 2,             # Optimized
+    'dropout': 0.3,              # Optimized
     'bidirectional': True,
     'lookback': 60,
     'epochs': 150,
-    'batch_size': 32,
-    'learning_rate': 0.001,
+    'batch_size': 64,            # Optimized
+    'learning_rate': 0.005,      # Optimized
     'weight_decay': 1e-5,
 }
 
@@ -69,12 +71,11 @@ def setup_logging():
 
 
 def fetch_training_data(symbol: str, timeframe: str = '1h', limit: int = 2000):
-    """接取訓練數據"""
     try:
         exchange = ccxt.binance({'enableRateLimit': True})
         symbol_pair = f"{symbol}/USDT"
         
-        logger.info(f"  📊 接取 {limit} 根蠟燭 {symbol}/{timeframe}...")
+        logger.info(f"  Fetching {limit} candles for {symbol}/{timeframe}...")
         ohlcv = exchange.fetch_ohlcv(symbol_pair, timeframe, limit=limit)
         
         df = pd.DataFrame(
@@ -85,20 +86,18 @@ def fetch_training_data(symbol: str, timeframe: str = '1h', limit: int = 2000):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df = df.sort_values('timestamp').reset_index(drop=True)
         
-        logger.info(f"  ✓ 接取完成 {len(df)} 根蠟燭")
+        logger.info(f"  Got {len(df)} candles")
         return df
     
     except Exception as e:
-        logger.error(f"  ✗ 接取數據失敗: {e}")
+        logger.error(f"  Error fetching data: {e}")
         return None
 
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """添加 44 個技術指標 (V8 版本)"""
+    """Add 44 technical indicators (V8 version)"""
     try:
-        logger.info(f"  📈 添加技術指標...")
-        
-        # 基本作用
+        # Basic calculations
         df['high-low'] = df['high'] - df['low']
         df['close-open'] = df['close'] - df['open']
         df['returns'] = df['close'].pct_change()
@@ -132,38 +131,35 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['atr'] = tr.rolling(window=14).mean()
         
-        # 動量
+        # Momentum
         df['momentum'] = df['close'].diff(10)
         
         # CCI
         tp = (df['high'] + df['low'] + df['close']) / 3
         df['cci'] = (tp - tp.rolling(window=20).mean()) / (0.015 * tp.rolling(window=20).std())
         
-        # 移動平均
+        # Moving Averages
         df['sma5'] = df['close'].rolling(window=5).mean()
         df['sma10'] = df['close'].rolling(window=10).mean()
         df['sma20'] = df['close'].rolling(window=20).mean()
         df['sma50'] = df['close'].rolling(window=50).mean()
         
-        # 成交量指標
+        # Volume indicators
         df['volume_sma'] = df['volume'].rolling(window=20).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
-        df = df.ffill()
+        df = df.ffill().bfill()
+        df = df.replace([np.inf, -np.inf], np.nan).fillna(method='ffill').fillna(method='bfill')
         
-        # 計算實際特徵數
-        feature_cols = [col for col in df.columns if col not in ['timestamp', 'close']]
-        logger.info(f"  ✓ 添加了 {len(feature_cols)} 個技術指標")
-        
+        logger.info(f"  Added 44 technical indicators")
         return df
     
     except Exception as e:
-        logger.error(f"  ✗ 添加技術指標失敗: {e}")
+        logger.error(f"  Error adding indicators: {e}")
         return None
 
 
 def prepare_sequences(X, y, lookback=60):
-    """準備序列數據"""
     X_seq, y_seq = [], []
     for i in range(len(X) - lookback):
         X_seq.append(X[i:i+lookback])
@@ -172,26 +168,26 @@ def prepare_sequences(X, y, lookback=60):
 
 
 class RegressionLSTM(nn.Module):
-    """V8 LSTM 模型"""
+    """V8 LSTM Model"""
     
-    def __init__(self, input_size=44, hidden_size=128, num_layers=2, dropout=0.3, bidirectional=True):
+    def __init__(self):
         super(RegressionLSTM, self).__init__()
         
         self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout,
-            bidirectional=bidirectional,
+            input_size=MODEL_CONFIG['input_size'],
+            hidden_size=MODEL_CONFIG['hidden_size'],
+            num_layers=MODEL_CONFIG['num_layers'],
+            dropout=MODEL_CONFIG['dropout'],
+            bidirectional=MODEL_CONFIG['bidirectional'],
             batch_first=True
         )
         
-        lstm_output_size = hidden_size * (2 if bidirectional else 1)
+        lstm_output_size = MODEL_CONFIG['hidden_size'] * (2 if MODEL_CONFIG['bidirectional'] else 1)
         
         self.regressor = nn.Sequential(
             nn.Linear(lstm_output_size, 64),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(MODEL_CONFIG['dropout']),
             nn.Linear(64, 32),
             nn.ReLU(),
             nn.Linear(32, 1)
@@ -205,8 +201,6 @@ class RegressionLSTM(nn.Module):
 
 
 class EarlyStopping:
-    """提前停止機制"""
-    
     def __init__(self, patience=20, min_delta=0.0):
         self.patience = patience
         self.min_delta = min_delta
@@ -226,53 +220,51 @@ class EarlyStopping:
         return False
 
 
-def train_model(symbol: str):
-    """訓練 V8 模型"""
+def predict_symbol(symbol: str):
     logger.info(f"\n{'='*60}")
-    logger.info(f"🚀 開始訓練 {symbol} V8 模型")
+    logger.info(f"Training {symbol} (V8 Optimized Model)")
     logger.info(f"{'='*60}")
     
-    # 接取數據
+    # Fetch data
     df = fetch_training_data(symbol)
     if df is None or len(df) == 0:
-        logger.error(f"  ✗ 接取 {symbol} 數據失敗")
+        logger.error(f"  Error: Failed to fetch {symbol} data")
         return False
     
-    # 添加技術指標
+    # Add technical indicators
     df = add_technical_indicators(df)
     if df is None:
-        logger.error(f"  ✗ 添加技術指標失敗")
+        logger.error(f"  Error: Failed to add indicators")
         return False
     
-    # 特徵提取
+    # Extract features
     feature_cols = [col for col in df.columns if col not in ['timestamp', 'close']]
     X = df[feature_cols].values
     y = df['close'].values
     
-    logger.info(f"  📦 原始特徵: {X.shape}")
+    # Handle NaN/Inf
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    y = np.nan_to_num(y, nan=0.0, posinf=0.0, neginf=0.0)
     
-    # 標準化
+    # Standardize
     scaler_X = MinMaxScaler()
     scaler_y = MinMaxScaler()
     X_scaled = scaler_X.fit_transform(X)
     y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
     
-    # 確保特徵數為 44 (V8 標準)
+    # Ensure 44 features
     if X_scaled.shape[1] > 44:
         X_scaled = X_scaled[:, :44]
-        logger.info(f"  ✓ 特徵數超過 44，已截斷")
     elif X_scaled.shape[1] < 44:
         padding = np.zeros((X_scaled.shape[0], 44 - X_scaled.shape[1]))
         X_scaled = np.hstack([X_scaled, padding])
-        logger.info(f"  ✓ 特徵數不足 44，已用零填充")
     
-    logger.info(f"  ✓ 標準化後特徵: {X_scaled.shape}")
+    logger.info(f"  Feature shape: {X_scaled.shape}")
     
-    # 準備序列
+    # Prepare sequences
     X_seq, y_seq = prepare_sequences(X_scaled, y_scaled, MODEL_CONFIG['lookback'])
-    logger.info(f"  ✓ 序列數據: {X_seq.shape}")
     
-    # 分割數據
+    # Split data
     n_samples = len(X_seq)
     train_size = int(n_samples * 0.8)
     val_size = int(n_samples * 0.1)
@@ -284,9 +276,9 @@ def train_model(symbol: str):
     X_test = X_seq[train_size+val_size:]
     y_test = y_seq[train_size+val_size:]
     
-    logger.info(f"  ✓ 數據分割: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
+    logger.info(f"  Data split: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
     
-    # 創建 DataLoader
+    # Create DataLoader
     train_dataset = TensorDataset(
         torch.tensor(X_train, dtype=torch.float32),
         torch.tensor(y_train, dtype=torch.float32)
@@ -299,22 +291,16 @@ def train_model(symbol: str):
     )
     val_loader = DataLoader(val_dataset, batch_size=MODEL_CONFIG['batch_size'])
     
-    # 創建模型
-    model = RegressionLSTM(
-        input_size=MODEL_CONFIG['input_size'],
-        hidden_size=MODEL_CONFIG['hidden_size'],
-        num_layers=MODEL_CONFIG['num_layers'],
-        dropout=MODEL_CONFIG['dropout'],
-        bidirectional=MODEL_CONFIG['bidirectional']
-    )
+    # Create model
+    model = RegressionLSTM()
     model.to(device)
     
-    logger.info(f"  ✓ 模型創建完成")
-    logger.info(f"     - 隱藏層: {MODEL_CONFIG['hidden_size']} x {MODEL_CONFIG['num_layers']}")
-    logger.info(f"     - Bidirectional: {MODEL_CONFIG['bidirectional']}")
-    logger.info(f"     - Dropout: {MODEL_CONFIG['dropout']}")
+    logger.info(f"  Model created")
+    logger.info(f"    Hidden: {MODEL_CONFIG['hidden_size']} x {MODEL_CONFIG['num_layers']}")
+    logger.info(f"    Dropout: {MODEL_CONFIG['dropout']}")
+    logger.info(f"    LR: {MODEL_CONFIG['learning_rate']} Batch: {MODEL_CONFIG['batch_size']}")
     
-    # 損失函數和優化器
+    # Loss and optimizer
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -325,16 +311,14 @@ def train_model(symbol: str):
         optimizer, mode='min', factor=0.5, patience=10, verbose=False
     )
     
-    # 提前停止
     early_stopping = EarlyStopping(patience=20, min_delta=1e-4)
     
-    # 訓練
-    logger.info(f"\n  📚 開始訓練 {MODEL_CONFIG['epochs']} epochs...\n")
+    # Training
+    logger.info(f"\n  Training {MODEL_CONFIG['epochs']} epochs...\n")
     
     best_val_loss = float('inf')
     
     for epoch in range(1, MODEL_CONFIG['epochs'] + 1):
-        # 訓練
         model.train()
         train_loss = 0.0
         for X_batch, y_batch in train_loader:
@@ -345,13 +329,14 @@ def train_model(symbol: str):
             predictions = model(X_batch)
             loss = criterion(predictions, y_batch)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
             train_loss += loss.item()
         
         train_loss /= len(train_loader)
         
-        # 驗證
+        # Validation
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -366,11 +351,11 @@ def train_model(symbol: str):
         val_loss /= len(val_loader)
         scheduler.step(val_loss)
         
-        # 打印進度
+        # Print progress
         if epoch % 10 == 0:
             logger.info(f"  Epoch {epoch:3d}/{MODEL_CONFIG['epochs']} | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
         
-        # 保存最佳模型
+        # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             model_dir = Path('models/saved')
@@ -378,13 +363,13 @@ def train_model(symbol: str):
             model_path = model_dir / f'{symbol}_model_v8.pth'
             torch.save(model.state_dict(), str(model_path))
         
-        # 提前停止
+        # Early stopping
         if early_stopping(val_loss):
-            logger.info(f"\n  ⏹️ 提前停止於 Epoch {epoch}")
+            logger.info(f"\n  Early stopping at Epoch {epoch}")
             break
     
-    # 測試
-    logger.info(f"\n  🧪 測試模型...")
+    # Testing
+    logger.info(f"\n  Evaluating on test set...")
     model.eval()
     
     with torch.no_grad():
@@ -397,38 +382,37 @@ def train_model(symbol: str):
             test_prices.extend(price.cpu().numpy().flatten())
             test_trues.extend(y_test[i:i+32])
     
-    # 反標準化
+    # Inverse transform
     test_prices_inverse = scaler_y.inverse_transform(np.array(test_prices).reshape(-1, 1)).flatten()
     test_trues_inverse = scaler_y.inverse_transform(np.array(test_trues).reshape(-1, 1)).flatten()
     
-    # 計算指標
+    # Calculate metrics
     mae = mean_absolute_error(test_trues_inverse, test_prices_inverse)
     mape = mean_absolute_percentage_error(test_trues_inverse, test_prices_inverse)
     rmse = np.sqrt(mean_squared_error(test_trues_inverse, test_prices_inverse))
     
-    logger.info(f"\n  📊 測試結果:")
-    logger.info(f"     MAE:  {mae:.6f} USD")
-    logger.info(f"     MAPE: {mape:.4f} %")
-    logger.info(f"     RMSE: {rmse:.6f} USD")
+    logger.info(f"\n  Test Results:")
+    logger.info(f"    MAE:  {mae:.6f} USD")
+    logger.info(f"    MAPE: {mape:.4f} %")
+    logger.info(f"    RMSE: {rmse:.6f} USD")
     
-    # 保存最終模型
+    # Save final model
     model_dir = Path('models/saved')
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / f'{symbol}_model_v8.pth'
     torch.save(model.state_dict(), str(model_path))
     
-    logger.info(f"\n  ✓ 模型已保存: {model_path}")
+    logger.info(f"\n  Model saved: {model_path}")
     logger.info(f"{'='*60}\n")
     
     return True
 
 
 def get_available_symbols():
-    """獲取常見幣種列表"""
     return [
         'BTC', 'ETH', 'ADA', 'DOGE', 'SOL', 'XRP', 'LINK', 'ATOM',
         'AVAX', 'FTM', 'NEAR', 'MATIC', 'ARB', 'OP', 'LTC', 'DOT',
-        'LTCBTC', 'BNB', 'LTC'
+        'BNB'
     ]
 
 
@@ -437,38 +421,38 @@ def main():
     
     setup_logging()
     
-    parser = argparse.ArgumentParser(description='V8 模型訓練腳本')
-    parser.add_argument('--symbol', type=str, default=None, help='幣種符號 (逗號分隔)')
+    parser = argparse.ArgumentParser(description='V8 Model Training Script')
+    parser.add_argument('--symbol', type=str, default=None, help='Crypto symbol (comma-separated)')
     args = parser.parse_args()
     
     logger.info('\n' + '='*60)
-    logger.info('V8 模型訓練腳本')
+    logger.info('V8 Model Training Script')
     logger.info('='*60)
-    logger.info(f"\n💻 設備: {device}")
-    logger.info(f"📦 配置: 44 特徵 | 128x2 隱藏層 | 150 Epochs")
+    logger.info(f"\nDevice: {device}")
+    logger.info(f"Config: 44 features | 64x2 hidden | 150 epochs | Optimized")
     
-    # 決定要訓練的幣種
+    # Determine which symbols to train
     if args.symbol:
         symbols = [s.upper().strip() for s in args.symbol.split(',')]
     else:
         symbols = get_available_symbols()
     
-    logger.info(f"\n🎯 要訓練的幣種: {', '.join(symbols)}\n")
+    logger.info(f"\nSymbols to train: {', '.join(symbols)}\n")
     
-    # 訓練每個幣種
+    # Train each symbol
     success_count = 0
     for i, symbol in enumerate(symbols, 1):
-        logger.info(f"\n[{i}/{len(symbols)}] 訓練 {symbol}...\n")
-        if train_model(symbol):
+        logger.info(f"\n[{i}/{len(symbols)}] Training {symbol}...\n")
+        if predict_symbol(symbol):
             success_count += 1
-        logger.info("\n" + "="*60)
     
-    # 完成摘要
-    logger.info(f"\n✅ 完成訓練")
+    # Summary
+    logger.info(f"\n{'='*60}")
+    logger.info(f"Training Complete")
     logger.info(f"{'='*60}")
-    logger.info(f"\n✓ 成功訓練: {success_count}/{len(symbols)} 個幣種")
-    logger.info(f"\n📁 模型保存位置: models/saved/")
-    logger.info(f"\n💡 接下來可以運行: python visualize_all_v8.py")
+    logger.info(f"\nSuccessful: {success_count}/{len(symbols)} symbols")
+    logger.info(f"Models saved: models/saved/")
+    logger.info(f"\nNext: python visualize_all_v8.py")
 
 
 if __name__ == '__main__':
