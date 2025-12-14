@@ -7,6 +7,7 @@ Usage:
   python download_from_hf.py
 
 Features:
+  - Auto-finds .env file in project root and parent directories
   - Reads HF_TOKEN from .env file (optional, for private repos)
   - Downloads entire models/ folder
   - Downloads bias_corrections_v8.json
@@ -32,12 +33,51 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Load .env file
-load_dotenv()
-
 # Configuration
 HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change if needed
 MODEL_DIR = "models/saved"
+
+
+def find_env_file():
+    """
+    自動搜尋 .env 檔案
+    搜尋順序:
+    1. 當前工作目錄
+    2. 指令檔案所在目錄
+    3. 上層目錄
+    4. 使用者主目錄
+    """
+    search_paths = [
+        Path.cwd() / ".env",  # 當前工作目錄
+        Path(__file__).parent / ".env",  # 指令所在目錄
+        Path(__file__).parent.parent / ".env",  # 上層目錄
+        Path.home() / ".env",  # 使用者主目錄
+    ]
+    
+    for env_path in search_paths:
+        if env_path.exists():
+            logger.info(f"✓ Found .env at: {env_path}")
+            return str(env_path)
+    
+    logger.warning("⚠️  .env file not found in standard locations")
+    logger.info("Searching for .env in project root...")
+    
+    # 尋找 .env 在專案根目錄（向上搜尋直到找到 .git 或 README.md）
+    current = Path.cwd()
+    for _ in range(5):  # 向上搜尋最多 5 層
+        if (current / ".env").exists():
+            logger.info(f"✓ Found .env at: {current / '.env'}")
+            return str(current / ".env")
+        if (current / ".git").exists() or (current / "README.md").exists():
+            env_file = current / ".env"
+            logger.info(f"✓ Project root found at: {current}")
+            if env_file.exists():
+                return str(env_file)
+        current = current.parent
+        if current == current.parent:  # 到達根目錄
+            break
+    
+    return None
 
 
 def ensure_directories():
@@ -52,7 +92,7 @@ def download_models_from_hf():
     hf_token = os.getenv('HF_TOKEN', None)  # Optional for public repos
     
     try:
-        logger.info(f"\n📤 Downloading models from {HF_REPO_ID}...")
+        logger.info(f"\n📦 Downloading models from {HF_REPO_ID}...")
         
         # Get all files in repo
         files = list_repo_files(
@@ -190,9 +230,18 @@ def main():
     logger.info(f"Repository: {HF_REPO_ID}")
     logger.info(f"Target Directory: {MODEL_DIR}")
     
+    # 自動搜尋並加載 .env
+    env_file = find_env_file()
+    if env_file:
+        logger.info(f"Loading environment from: {env_file}")
+        load_dotenv(env_file)
+    else:
+        logger.warning("⚠️  No .env file found, trying system environment")
+        load_dotenv()  # 使用系統預設路徑
+    
     hf_token = os.getenv('HF_TOKEN', None)
     if hf_token:
-        logger.info(f"✓ HF_TOKEN loaded from .env")
+        logger.info(f"✓ HF_TOKEN loaded: {hf_token[:20]}...")
     else:
         logger.info(f"ℹ️  No HF_TOKEN found (OK for public repos)")
     
