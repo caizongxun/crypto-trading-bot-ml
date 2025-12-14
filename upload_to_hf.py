@@ -6,6 +6,11 @@ Upload Models to HuggingFace Hub
 Usage:
   python upload_to_hf.py
 
+Features:
+  - Uploads entire models/saved/ folder at once (avoids API rate limiting)
+  - Uploads bias corrections and bot predictor
+  - Creates README.md for HF repo
+
 Requires:
   - HF_TOKEN environment variable
   - huggingface_hub package
@@ -20,7 +25,7 @@ from huggingface_hub import HfApi, Repository
 import json
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -158,17 +163,17 @@ For issues and questions, please refer to the GitHub repository.
     
     with open(README_PATH, 'w') as f:
         f.write(readme)
-    logger.info(f"Created {README_PATH}")
+    logger.info(f"✓ Created {README_PATH}")
 
 
 def upload_to_hf():
-    """Upload models to HuggingFace"""
+    """Upload models to HuggingFace - Optimized for batch upload"""
     
     # Check token
     hf_token = os.getenv('HF_TOKEN')
     if not hf_token:
-        logger.error("HF_TOKEN environment variable not set")
-        logger.error("Set it with: export HF_TOKEN='your_token'")
+        logger.error("❌ HF_TOKEN environment variable not set")
+        logger.error("   Set it with: export HF_TOKEN='your_token'")
         return False
     
     # Create README
@@ -188,74 +193,123 @@ def upload_to_hf():
                 private=False,  # Set to True if private
                 token=hf_token
             )
-            logger.info(f"Repo URL: {repo_url}")
+            logger.info(f"✓ Repo URL: {repo_url}")
         except Exception as e:
-            logger.info(f"Repo already exists or other issue: {e}")
+            logger.info(f"ℹ️  Repo already exists: {str(e)[:80]}")
         
-        # Upload models
-        logger.info(f"\nUploading models from {MODEL_DIR}...")
+        # Check if models directory exists
         model_dir = Path(MODEL_DIR)
-        if model_dir.exists():
-            for model_file in model_dir.glob('*.pth'):
-                logger.info(f"  Uploading {model_file.name}...")
-                api.upload_file(
-                    path_or_fileobj=str(model_file),
-                    path_in_repo=f"models/{model_file.name}",
+        if not model_dir.exists():
+            logger.error(f"❌ Model directory not found: {MODEL_DIR}")
+            return False
+        
+        model_files = list(model_dir.glob('*.pth'))
+        if not model_files:
+            logger.error(f"❌ No .pth files found in {MODEL_DIR}")
+            return False
+        
+        logger.info(f"Found {len(model_files)} model files to upload")
+        
+        # Upload entire models/saved folder at once (optimized for batch)
+        logger.info(f"\n📤 Uploading entire models/saved folder...")
+        logger.info(f"   Total files: {len(model_files)}")
+        
+        try:
+            api.upload_folder(
+                folder_path=MODEL_DIR,
+                repo_id=HF_REPO_ID,
+                repo_type="model",
+                token=hf_token,
+                path_in_repo="models",  # Upload to models/ subfolder in HF
+                multi_commit=True,  # Use multi-commit for large uploads
+                multi_commit_pr=False
+            )
+            logger.info(f"   ✓ Folder uploaded successfully")
+        except Exception as e:
+            logger.error(f"   ❌ Folder upload failed: {e}")
+            logger.info(f"   Trying fallback method...")
+            
+            # Fallback: Try uploading with commit_title
+            try:
+                api.upload_folder(
+                    folder_path=MODEL_DIR,
                     repo_id=HF_REPO_ID,
                     repo_type="model",
-                    token=hf_token
+                    token=hf_token,
+                    path_in_repo="models",
+                    commit_message="Upload all V8 models"
                 )
-                logger.info(f"    ✓ {model_file.name}")
-        else:
-            logger.error(f"Model directory not found: {MODEL_DIR}")
-            return False
+                logger.info(f"   ✓ Folder uploaded successfully (fallback method)")
+            except Exception as e2:
+                logger.error(f"   ❌ Fallback also failed: {e2}")
+                return False
         
         # Upload bias corrections
         if os.path.exists(CONFIG_FILE):
-            logger.info(f"\nUploading bias corrections...")
-            api.upload_file(
-                path_or_fileobj=CONFIG_FILE,
-                path_in_repo="bias_corrections_v8.json",
-                repo_id=HF_REPO_ID,
-                repo_type="model",
-                token=hf_token
-            )
-            logger.info(f"  ✓ bias_corrections_v8.json")
+            logger.info(f"\n📄 Uploading bias corrections...")
+            try:
+                api.upload_file(
+                    path_or_fileobj=CONFIG_FILE,
+                    path_in_repo="bias_corrections_v8.json",
+                    repo_id=HF_REPO_ID,
+                    repo_type="model",
+                    token=hf_token,
+                    commit_message="Upload bias corrections configuration"
+                )
+                logger.info(f"   ✓ bias_corrections_v8.json")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Could not upload bias_corrections: {e}")
+        else:
+            logger.warning(f"   ⚠️  bias_corrections_v8.json not found")
         
         # Upload bot predictor
-        logger.info(f"\nUploading bot predictor...")
-        api.upload_file(
-            path_or_fileobj="bot_predictor.py",
-            path_in_repo="bot_predictor.py",
-            repo_id=HF_REPO_ID,
-            repo_type="model",
-            token=hf_token
-        )
-        logger.info(f"  ✓ bot_predictor.py")
+        logger.info(f"\n🤖 Uploading bot predictor...")
+        try:
+            api.upload_file(
+                path_or_fileobj="bot_predictor.py",
+                path_in_repo="bot_predictor.py",
+                repo_id=HF_REPO_ID,
+                repo_type="model",
+                token=hf_token,
+                commit_message="Upload bot predictor module"
+            )
+            logger.info(f"   ✓ bot_predictor.py")
+        except Exception as e:
+            logger.warning(f"   ⚠️  Could not upload bot_predictor: {e}")
         
         # Upload README
-        logger.info(f"\nUploading README...")
-        api.upload_file(
-            path_or_fileobj=README_PATH,
-            path_in_repo="README.md",
-            repo_id=HF_REPO_ID,
-            repo_type="model",
-            token=hf_token
-        )
-        logger.info(f"  ✓ README.md")
+        logger.info(f"\n📖 Uploading README...")
+        try:
+            api.upload_file(
+                path_or_fileobj=README_PATH,
+                path_in_repo="README.md",
+                repo_id=HF_REPO_ID,
+                repo_type="model",
+                token=hf_token,
+                commit_message="Upload README documentation"
+            )
+            logger.info(f"   ✓ README.md")
+        except Exception as e:
+            logger.warning(f"   ⚠️  Could not upload README: {e}")
         
-        logger.info(f"\n✅ All files uploaded successfully!")
+        logger.info(f"\n" + "="*60)
+        logger.info(f"✅ Upload Complete!")
+        logger.info(f"="*60)
         logger.info(f"Repository: https://huggingface.co/{HF_REPO_ID}")
+        logger.info(f"Models: {len(model_files)} files uploaded")
+        logger.info(f"="*60)
         return True
     
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
+        logger.error(f"❌ Upload failed: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("HuggingFace Upload Tool - V8 Models")
+    logger.info("HuggingFace Upload Tool - V8 Models (Batch Optimized)")
     logger.info("="*60)
     
     success = upload_to_hf()
