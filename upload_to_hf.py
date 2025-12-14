@@ -7,12 +7,13 @@ Usage:
   python upload_to_hf.py
 
 Features:
+  - Reads HF_TOKEN from .env file
   - Uploads entire models/saved/ folder at once (avoids API rate limiting)
   - Uploads bias corrections and bot predictor
   - Creates README.md for HF repo
 
 Requires:
-  - HF_TOKEN environment variable
+  - .env file with HF_TOKEN
   - huggingface_hub package
   - All models in models/saved/
   - bias_corrections_v8.json in models/
@@ -21,12 +22,15 @@ Requires:
 import os
 import sys
 from pathlib import Path
-from huggingface_hub import HfApi, Repository
-import json
+from huggingface_hub import HfApi
+from dotenv import load_dotenv
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# Load .env file
+load_dotenv()
 
 # Configuration
 HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change to your HF username
@@ -135,6 +139,7 @@ numpy>=1.23.0
 scikit-learn>=1.2.0
 ccxt>=2.0.0
 huggingface_hub>=0.16.0
+python-dotenv>=1.0.0
 ```
 
 ## License
@@ -169,12 +174,14 @@ For issues and questions, please refer to the GitHub repository.
 def upload_to_hf():
     """Upload models to HuggingFace - Optimized for batch upload"""
     
-    # Check token
+    # Check token from .env
     hf_token = os.getenv('HF_TOKEN')
     if not hf_token:
-        logger.error("❌ HF_TOKEN environment variable not set")
-        logger.error("   Set it with: export HF_TOKEN='your_token'")
+        logger.error("✗ HF_TOKEN not found in .env file")
+        logger.error("   Add HF_TOKEN=your_token to your .env file")
         return False
+    
+    logger.info(f"✓ HF_TOKEN loaded from .env")
     
     # Create README
     create_readme()
@@ -200,12 +207,12 @@ def upload_to_hf():
         # Check if models directory exists
         model_dir = Path(MODEL_DIR)
         if not model_dir.exists():
-            logger.error(f"❌ Model directory not found: {MODEL_DIR}")
+            logger.error(f"✗ Model directory not found: {MODEL_DIR}")
             return False
         
         model_files = list(model_dir.glob('*.pth'))
         if not model_files:
-            logger.error(f"❌ No .pth files found in {MODEL_DIR}")
+            logger.error(f"✗ No .pth files found in {MODEL_DIR}")
             return False
         
         logger.info(f"Found {len(model_files)} model files to upload")
@@ -226,7 +233,7 @@ def upload_to_hf():
             )
             logger.info(f"   ✓ Folder uploaded successfully")
         except Exception as e:
-            logger.error(f"   ❌ Folder upload failed: {e}")
+            logger.error(f"   ✗ Folder upload failed: {e}")
             logger.info(f"   Trying fallback method...")
             
             # Fallback: Try uploading with commit_title
@@ -241,7 +248,7 @@ def upload_to_hf():
                 )
                 logger.info(f"   ✓ Folder uploaded successfully (fallback method)")
             except Exception as e2:
-                logger.error(f"   ❌ Fallback also failed: {e2}")
+                logger.error(f"   ✗ Fallback also failed: {e2}")
                 return False
         
         # Upload bias corrections
@@ -301,7 +308,7 @@ def upload_to_hf():
         return True
     
     except Exception as e:
-        logger.error(f"❌ Upload failed: {e}")
+        logger.error(f"✗ Upload failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -311,6 +318,7 @@ if __name__ == '__main__':
     logger.info("="*60)
     logger.info("HuggingFace Upload Tool - V8 Models (Batch Optimized)")
     logger.info("="*60)
+    logger.info(f"Reading from: .env")
     
     success = upload_to_hf()
     sys.exit(0 if success else 1)
