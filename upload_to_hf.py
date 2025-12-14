@@ -8,6 +8,7 @@ Usage:
 
 Features:
   - Auto-finds .env file in project root and parent directories
+  - Robust .env file reading with encoding support
   - Reads HF_TOKEN from .env file
   - Uploads entire models/saved/ folder at once (avoids API rate limiting)
   - Uploads bias corrections and bot predictor
@@ -77,6 +78,64 @@ def find_env_file():
             break
     
     return None
+
+
+def read_env_file(env_path):
+    """
+    強化版 .env 檔案讀取
+    支持多種編碼和格式
+    """
+    env_dict = {}
+    
+    try:
+        # 嘗試多種編碼
+        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                with open(env_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                logger.info(f"✓ Successfully read .env with encoding: {encoding}")
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            logger.error(f"✗ Could not read .env file with any encoding")
+            return env_dict
+        
+        # 解析 .env 檔案
+        for line in content.split('\n'):
+            line = line.strip()
+            
+            # 跳過空行和註釋
+            if not line or line.startswith('#'):
+                continue
+            
+            # 解析 KEY=VALUE
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # 移除引號
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                
+                # 移除行末註釋
+                if '#' in value:
+                    value = value.split('#')[0].strip()
+                
+                env_dict[key] = value
+                logger.debug(f"  Loaded: {key}={value[:50]}..." if len(value) > 50 else f"  Loaded: {key}={value}")
+        
+        logger.info(f"✓ Parsed {len(env_dict)} variables from .env")
+        return env_dict
+    
+    except Exception as e:
+        logger.error(f"✗ Error reading .env file: {e}")
+        return env_dict
 
 
 def create_readme():
@@ -218,25 +277,58 @@ def upload_to_hf():
     env_file = find_env_file()
     if env_file:
         logger.info(f"Loading environment from: {env_file}")
-        load_dotenv(env_file)
+        
+        # 使用增強版讀取器
+        env_dict = read_env_file(env_file)
+        
+        # 手動設置到 os.environ
+        for key, value in env_dict.items():
+            os.environ[key] = value
+        
+        # 也使用 load_dotenv 以備不時之需
+        load_dotenv(env_file, override=True, encoding='utf-8')
     else:
-        logger.warning("⚠️  No .env file found, trying to load from system environment")
+        logger.warning("⚠️  No .env file found, trying system environment")
         load_dotenv()  # 使用系統預設路徑
     
     # 檢查 token
     hf_token = os.getenv('HF_TOKEN')
+    
+    # Debug: 輸出已加載的 tokens (隱藏敏感信息)
+    logger.info("\nLoaded environment variables:")
+    for key in sorted(os.environ.keys()):
+        if 'TOKEN' in key or 'KEY' in key or 'PASSWORD' in key or 'SECRET' in key:
+            value = os.environ[key]
+            masked = f"{value[:10]}..." if len(value) > 10 else "(empty)"
+            logger.info(f"  {key}: {masked}")
+    
     if not hf_token:
         logger.error("✗ HF_TOKEN not found!")
         logger.error("")
-        logger.error("Please create .env file with:")
-        logger.error("  1. Copy .env.example to .env")
-        logger.error("  2. Add your HF_TOKEN to .env:")
-        logger.error("     HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
+        logger.error("Please check your .env file:")
+        logger.error("  1. .env file should contain: HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
+        logger.error("  2. Make sure there are NO spaces around the = sign")
+        logger.error("  3. Make sure HF_TOKEN is not wrapped in quotes")
+        logger.error("  4. Make sure there are no extra spaces at the end of the line")
         logger.error("")
-        logger.error("Searched locations:")
-        logger.error(f"  - {Path.cwd() / '.env'}")
-        logger.error(f"  - {Path(__file__).parent / '.env'}")
-        logger.error(f"  - {Path(__file__).parent.parent / '.env'}")
+        
+        # 嘗試讀取 .env 並輸出前 10 行
+        if env_file and Path(env_file).exists():
+            logger.error(f"Content of {env_file}:")
+            try:
+                with open(env_file, 'r', encoding='utf-8') as f:
+                    for i, line in enumerate(f):
+                        if i < 10:
+                            # 隱藏敏感信息
+                            if 'TOKEN' in line or 'KEY' in line:
+                                logger.error(f"  Line {i+1}: {line[:50]}...")
+                            else:
+                                logger.error(f"  Line {i+1}: {line.rstrip()}")
+                        else:
+                            break
+            except Exception as e:
+                logger.error(f"  Could not read file: {e}")
+        
         return False
     
     logger.info(f"✓ HF_TOKEN loaded: {hf_token[:20]}...")
