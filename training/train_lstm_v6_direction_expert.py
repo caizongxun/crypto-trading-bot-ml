@@ -1,18 +1,16 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LSTM 訓練腳本 v6 - 方向專家模式
+LSTM 訓練腳本 v6 - 方向專家模式 (修正版)
 
-特别訪作方案（只訓練方向）：
-- 改進方向你似增密：上漢(+5¥)、中性(͡±$)、下跌(-5¥) 三籤
-Why 3-class？上漢下跌中間有大量曙曡日，应该忽略推濯
-V版本特誉：
-- 虛數據增挡（掠例配份）
-- Focal Loss 物敖一惲漢稤稫
-- 高级核架促進（霸綠腐滁沙、侏秺正佐 仃後)
+特別訪作方案（只訓練方向）：
+- 改進方向你似增密：上漢(+2%)、中性(±2%)、下跌(-2%) 三籤
+- 會下采樣中性魚類池至 50% 以平衡數據
+- Focal Loss 輕料涂懷 (gamma=1.5)
+
 用法:
   python training/train_lstm_v6_direction_expert.py --symbol SOL
-  python training/train_lstm_v6_direction_expert.py --symbol BTC --epochs 200 --threshold 0.05
+  python training/train_lstm_v6_direction_expert.py --symbol BTC --threshold 0.02
 """
 
 import os
@@ -61,7 +59,8 @@ DEFAULT_CONFIG = {
         'train_split': 0.7,
         'val_split': 0.15,
         'test_split': 0.15,
-        'direction_threshold': 0.05,  # 方向閾值：>5% 上漲，<-5% 下跌
+        'direction_threshold': 0.02,  # 降低到 2% （把洗樽方向傷事）
+        'neutral_downsample_ratio': 0.5,  # 中性類向下采樣准彈 50%
     },
     'optimization': {
         'optimizer': 'adamw',
@@ -69,7 +68,7 @@ DEFAULT_CONFIG = {
         'patience': 30,
         'min_delta': 1e-5,
         'focal_loss_alpha': 0.25,  # Focal Loss 參數
-        'focal_loss_gamma': 2.0,
+        'focal_loss_gamma': 1.5,   # 降低到 1.5 (不詳歫丢)
     },
     'data': {
         'timeframe': '1h',
@@ -173,7 +172,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['volume_sma'] = df['volume'].rolling(window=20).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
-        df = df.fillna(method='bfill')
+        df = df.ffill()  # 使用 ffill 代替徜用 fillna
         
         logger.info(f"✓ Added technical indicators")
         return df
@@ -246,6 +245,25 @@ class DirectionExpertLSTM(nn.Module):
         return logits
 
 
+def downsample_neutral(X_seq, y_seq, downsample_ratio=0.5):
+    """下采樣中性髦惱似這閾馐逞颜 樣本比 (class 1)"""
+    indices_neutral = np.where(y_seq == 1)[0]
+    indices_other = np.where(y_seq != 1)[0]
+    
+    # 隨機選擇中性樣本
+    neutral_keep_count = int(len(indices_neutral) * downsample_ratio)
+    indices_neutral_keep = np.random.choice(indices_neutral, size=neutral_keep_count, replace=False)
+    
+    # 合佶所有不是中性的樣本和一部分中性樣本
+    keep_indices = np.concatenate([indices_other, indices_neutral_keep])
+    keep_indices = np.sort(keep_indices)
+    
+    X_balanced = X_seq[keep_indices]
+    y_balanced = y_seq[keep_indices]
+    
+    return X_balanced, y_balanced
+
+
 def train_epoch(model, train_loader, optimizer, device, criterion):
     """訓練一個 epoch"""
     model.train()
@@ -306,12 +324,12 @@ def main():
     global logger
     
     import argparse
-    parser = argparse.ArgumentParser(description='LSTM Training v6 - Direction Expert')
+    parser = argparse.ArgumentParser(description='LSTM Training v6 - Direction Expert (Fixed)')
     parser.add_argument('--symbol', type=str, default='SOL', help='Trading symbol')
     parser.add_argument('--epochs', type=int, default=200, help='Number of epochs')
     parser.add_argument('--batch-size', type=int, default=32, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--threshold', type=float, default=0.05, help='Direction threshold (default 5%)')
+    parser.add_argument('--threshold', type=float, default=0.02, help='Direction threshold (default 2%)')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda or cpu)')
     
     args = parser.parse_args()
@@ -320,13 +338,14 @@ def main():
     setup_logging(args.symbol, version='v6')
     
     logger.info('='*80)
-    logger.info('LSTM MODEL TRAINING (V6 - Direction Expert Mode)')
+    logger.info('LSTM MODEL TRAINING (V6 - Direction Expert Mode - FIXED)')
     logger.info('='*80)
     logger.info(f"Symbol: {args.symbol}")
     logger.info(f"Device: {args.device}")
     logger.info(f"Epochs: {args.epochs}")
     logger.info(f"Direction Threshold: {args.threshold*100:.1f}%")
     logger.info(f"Strategy: 3-class classification (Down/Neutral/Up) with Focal Loss")
+    logger.info(f"Neutral Downsample Ratio: 50% (解決日诏不衡)")
     
     # 加載配置
     config = DEFAULT_CONFIG.copy()
@@ -373,18 +392,20 @@ def main():
     
     logger.info(f"✓ Feature matrix shape: {X_scaled.shape}")
     
-    # 計算類別分布
+    # 計算類別分布（陚載前）
     class_counts = np.bincount(y_labels)
-    logger.info(f"Class distribution: {class_counts[0]} down, {class_counts[1]} neutral, {class_counts[2]} up")
-    
-    # 計算類別權重（解決不衡問題）
-    class_weights = torch.tensor([1.0 / (c + 1e-6) for c in class_counts], dtype=torch.float32).to(args.device)
-    class_weights = class_weights / class_weights.sum() * len(class_weights)
-    logger.info(f"Class weights: {class_weights.cpu().numpy()}")
+    logger.info(f"Class distribution BEFORE: {class_counts[0]} down, {class_counts[1]} neutral, {class_counts[2]} up")
     
     # 4. 準備序列
     logger.info("[3/6] Preparing sequences...")
     X_seq, y_seq = prepare_sequences(X_scaled, y_labels, config['training']['lookback_window'])
+    
+    # 下采樣中性（解決極端不衡）
+    logger.info(f"[3.5/6] Downsampling neutral class to 50%...")
+    X_seq, y_seq = downsample_neutral(X_seq, y_seq, downsample_ratio=0.5)
+    
+    class_counts_after = np.bincount(y_seq, minlength=3)
+    logger.info(f"Class distribution AFTER: {class_counts_after[0]} down, {class_counts_after[1]} neutral, {class_counts_after[2]} up")
     
     # train/val/test 分割
     n_samples = len(X_seq)
@@ -396,15 +417,9 @@ def main():
     
     logger.info(f"  Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
     
-    # 5. 建立 DataLoaders（使用加權採樣器處理不衡）
+    # 5. 建立 DataLoaders
     train_dataset = TensorDataset(torch.tensor(X_train), torch.tensor(y_train))
-    
-    # 計算訓練集的樣本權重
-    train_class_counts = np.bincount(y_train, minlength=3)
-    sample_weights = np.array([1.0 / (class_counts[label] + 1e-6) for label in y_train])
-    sampler = WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
-    
-    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], sampler=sampler)
+    train_loader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True)
     
     val_dataset = TensorDataset(torch.tensor(X_val), torch.tensor(y_val))
     val_loader = DataLoader(val_dataset, batch_size=config['training']['batch_size'], shuffle=False)
@@ -518,7 +533,7 @@ def main():
         'up_movement_recall': float(up_recall),
         'test_samples': len(test_labels),
         'model_params': sum(p.numel() for p in model.parameters()),
-        'method': '3_class_classification_focal_loss',
+        'method': '3_class_classification_focal_loss_balanced',
         'direction_threshold': args.threshold,
     }
     
