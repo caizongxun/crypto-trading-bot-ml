@@ -294,25 +294,252 @@ def predict_sol():
     }
 
 
+def create_html_report(result):
+    """Create clean HTML report"""
+    mae = result['mae']
+    mape = result['mape']
+    rmse = result['rmse']
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    html = f'''<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOL V8 預測</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+        
+        body {{
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        
+        .container {{
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }}
+        
+        header {{
+            background: linear-gradient(135deg, #2196F3 0%, #1976d2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }}
+        
+        header h1 {{
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }}
+        
+        header p {{
+            font-size: 1.1em;
+            opacity: 0.9;
+        }}
+        
+        .content {{
+            padding: 40px;
+        }}
+        
+        .stats {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }}
+        
+        .stat-card {{
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border-left: 4px solid #2196F3;
+        }}
+        
+        .stat-value {{
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #2196F3;
+            margin: 10px 0;
+        }}
+        
+        .stat-label {{
+            color: #666;
+            font-weight: 500;
+        }}
+        
+        .section {{
+            margin-bottom: 30px;
+        }}
+        
+        .section h2 {{
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+            border-bottom: 2px solid #2196F3;
+            padding-bottom: 10px;
+        }}
+        
+        img {{
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin: 15px 0;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }}
+        
+        footer {{
+            background: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+        }}
+        
+        .badge {{
+            display: inline-block;
+            background: #4CAF50;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }}
+        
+        .version-note {{
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #2196F3;
+        }}
+        
+        .version-note ul {{
+            margin-left: 20px;
+            margin-top: 10px;
+        }}
+        
+        .version-note li {{
+            margin: 8px 0;
+        }}
+        
+        .info-box {{
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.95em;
+            line-height: 1.6;
+        }}
+        
+        .info-box p {{
+            margin: 8px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>SOL V8 模型預測</h1>
+            <p>Solana Price Prediction - V8 Stable Model</p>
+            <span class="badge">V8 穩定模型</span>
+        </header>
+        
+        <div class="content">
+            <div class="version-note">
+                <strong>V8 特點:</strong>
+                <ul>
+                    <li>&#10003; 策略穩定 - 128 x 2 網絡結構</li>
+                    <li>&#10003; 44 個技術指標</li>
+                    <li>&#10003; 已經過訓練驗證</li>
+                    <li>&#10003; 推薦鏡像應用</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>Performance Metrics</h2>
+                <div class="stats">
+                    <div class="stat-card">
+                        <div class="stat-label">Mean Absolute Error</div>
+                        <div class="stat-value">{mae:.6f}</div>
+                        <div class="stat-label">USD</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Mean Absolute Percentage Error</div>
+                        <div class="stat-value">{mape:.4f}</div>
+                        <div class="stat-label">%</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Root Mean Squared Error</div>
+                        <div class="stat-value">{rmse:.6f}</div>
+                        <div class="stat-label">USD</div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Price Path Comparison</h2>
+                <p>Blue Line = Actual Price | Red Line = V8 Predicted Price</p>
+                <img src="SOL_predictions_v8.png" alt="SOL Price Predictions">
+            </div>
+            
+            <div class="section">
+                <h2>Performance Metrics Chart</h2>
+                <img src="SOL_metrics_v8.png" alt="SOL Metrics">
+            </div>
+            
+            <div class="section">
+                <h2>Model Information</h2>
+                <div class="info-box">
+                    <p><strong>Network Architecture:</strong> 128 Hidden x 2 Layers (V8 Standard)</p>
+                    <p><strong>Technical Indicators:</strong> 44 Features</p>
+                    <p><strong>Training Epochs:</strong> 150</p>
+                    <p><strong>Loss Function:</strong> MSE (Mean Squared Error)</p>
+                    <p><strong>Optimizer:</strong> Adam</p>
+                    <p><strong>Model Path:</strong> models/backup_v8/SOL_model.pth</p>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>SOL V8 Price Prediction | Generated: {timestamp}</p>
+            <p style="margin-top: 10px;">Data from CCXT / Binance API</p>
+        </footer>
+    </div>
+</body>
+</html>'''
+    
+    return html
+
+
 def main():
     global logger
     
     setup_logging()
     
     logger.info('\n' + '='*60)
-    logger.info('SOL 個評析化器 - V8 穩定模型')
+    logger.info('SOL Price Analyzer - V8 Stable Model')
     logger.info('='*60)
     
     result = predict_sol()
     
     if not result:
-        logger.error("\n❌ 失敗")
+        logger.error("\nFailed to generate predictions")
         return
     
-    # 產生可視化
-    logger.info(f"\n📈 生成可視化...")
+    # Generate visualizations
+    logger.info(f"\nGenerating visualizations...")
     
-    # 1. 價格路徑對比
+    # 1. Price path comparison chart
     fig, ax = plt.subplots(figsize=(14, 6))
     
     predicted = result['predicted']
@@ -322,7 +549,7 @@ def main():
     ax.plot(x, actual, 'b-', label='Actual Price', linewidth=2.5, alpha=0.8)
     ax.plot(x, predicted, 'r-', label='Predicted Price (V8)', linewidth=2.5, alpha=0.8)
     
-    ax.set_title(f"SOL V8 價格預測 - MAE: {result['mae']:.4f} USD | MAPE: {result['mape']:.4f}%", 
+    ax.set_title(f"SOL V8 Price Prediction - MAE: {result['mae']:.4f} USD | MAPE: {result['mape']:.4f}%", 
                  fontsize=14, fontweight='bold')
     ax.set_xlabel('Time Steps', fontsize=12)
     ax.set_ylabel('Price (USD)', fontsize=12)
@@ -331,10 +558,10 @@ def main():
     
     plt.tight_layout()
     plt.savefig('SOL_predictions_v8.png', dpi=150, bbox_inches='tight')
-    logger.info("✓ 保存: SOL_predictions_v8.png")
+    logger.info("✓ Saved: SOL_predictions_v8.png")
     plt.close()
     
-    # 2. 統計粗
+    # 2. Performance metrics chart
     fig, ax = plt.subplots(figsize=(10, 6))
     
     metrics = ['MAE (USD)', 'MAPE (%)', 'RMSE (USD)']
@@ -349,193 +576,32 @@ def main():
                 f'{value:.4f}',
                 ha='center', va='bottom', fontweight='bold', fontsize=11)
     
-    ax.set_title('SOL V8 性能指標', fontsize=14, fontweight='bold')
-    ax.set_ylabel('值', fontsize=12)
+    ax.set_title('SOL V8 Performance Metrics', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Value', fontsize=12)
     ax.grid(axis='y', alpha=0.3)
     
     plt.tight_layout()
     plt.savefig('SOL_metrics_v8.png', dpi=150, bbox_inches='tight')
-    logger.info("✓ 保存: SOL_metrics_v8.png")
+    logger.info("✓ Saved: SOL_metrics_v8.png")
     plt.close()
     
-    # 3. 生成 HTML
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="zh-TW">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>SOL V8 預測</title>
-        <style>
-            * {{
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }}
-            
-            body {{
-                font-family: Arial, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
-                padding: 20px;
-            }}
-            
-            .container {{
-                max-width: 1000px;
-                margin: 0 auto;
-                background: white;
-                border-radius: 12px;
-                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-                overflow: hidden;
-            }}
-            
-            header {{
-                background: linear-gradient(135deg, #2196F3 0%, #1976d2 100%);
-                color: white;
-                padding: 40px;
-                text-align: center;
-            }}
-            
-            header h1 {{
-                font-size: 2.5em;
-                margin-bottom: 10px;
-            }}
-            
-            header p {{
-                font-size: 1.1em;
-                opacity: 0.9;
-            }}
-            
-            .content {{
-                padding: 40px;
-            }}
-            
-            .stats {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                margin-bottom: 30px;
-            }}
-            
-            .stat-card {{
-                background: #f5f5f5;
-                padding: 20px;
-                border-radius: 8px;
-                text-align: center;
-                border-left: 4px solid #2196F3;
-            }}
-            
-            .stat-value {{
-                font-size: 1.8em;
-                font-weight: bold;
-                color: #2196F3;
-                margin: 10px 0;
-            }}
-            
-            .stat-label {{
-                color: #666;
-                font-weight: 500;
-            }}
-            
-            .section {{
-                margin-bottom: 30px;
-            }}
-            
-            .section h2 {{
-                color: #333;
-                margin-bottom: 15px;
-                font-size: 1.5em;
-                border-bottom: 2px solid #2196F3;
-                padding-bottom: 10px;
-            }}
-            
-            img {{
-                max-width: 100%;
-                height: auto;
-                border-radius: 8px;
-                margin: 15px 0;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-            }}
-            
-            footer {{
-                background: #f5f5f5;
-                padding: 20px;
-                text-align: center;
-                color: #666;
-                font-size: 0.9em;
-            }}
-            
-            .badge {{
-                display: inline-block;
-                background: #4CAF50;
-                color: white;
-                padding: 8px 16px;
-                border-radius: 20px;
-                font-weight: bold;
-                margin-top: 10px;
-            }}
-            
-            .version-note {{
-                background: #e3f2fd;
-                padding: 15px;
-                border-radius: 8px;
-                margin-bottom: 20px;
-                border-left: 4px solid #2196F3;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class=\"container\">
-            <header>
-                <h1>📊 SOL V8 模型預測</h1>
-                <p>Solana Price Prediction - V8 Stable Model</p>
-                <span class=\"badge\">V8 穩定模型</span>
-            </header>
-            
-            <div class=\"content\">
-                <div class=\"version-note\">
-                    <strong>🌟 V8 特點:</strong>
-                    <ul style=\"margin-left: 20px; margin-top: 10px;\">
-                        <li>✓ 策略穩定 - 128 x 2 網絡結構</li>
-                        <li>✓ 44 個技術指標 (覆蓋索轉所需)</li>
-                        <li>✓ 已經過訓練驗證 (效果穩定)</li>
-                        <li>✓ 推薦鏡像應用</li>
-                    </ul>
-                </div>
-                
-                <div class=\"section\">
-                    <h2>📈 性能指標</h2>
-                    <div class=\"stats\">
-                        <div class=\"stat-card\">
-                            <div class=\"stat-label\">平均絕對誤差</div>
-                            <div class=\"stat-value\">{result['mae']:.6f}</div>
-                            <div class=\"stat-label\">USD</div>
-                        </div>
-                        <div class=\"stat-card\">
-                            <div class=\"stat-label\">平均百分比誤差</div>
-                            <div class=\"stat-value\">{result['mape']:.4f}</div>
-                            <div class=\"stat-label\">%</div>
-                        </div>
-                        <div class=\"stat-card\">
-                            <div class=\"stat-label\">根平方誤差</div>
-                            <div class=\"stat-value\">{result['rmse']:.6f}</div>
-                            <div class=\"stat-label\">USD</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class=\"section\">
-                    <h2>📈 價格路徑對比</h2>
-                    <p>📍 藍線 = 實際價格 | 紅線 = V8 預測價格</p>
-                    <img src=\"SOL_predictions_v8.png\" alt=\"SOL Price Predictions\">
-                </div>
-                
-                <div class=\"section\">
-                    <h2>📋 指標比較</h2>
-                    <img src=\"SOL_metrics_v8.png\" alt=\"SOL Metrics\">
-                </div>
-                
-                <div class=\"section\">
-                    <h2>ℹ️ 模型資訊</h2>
-                    <div style=\"background: #f5f5f5; padding: 15px; border-radius: 8px;\">
-                        <p><strong>🧠 網絡結構:</strong> 128 隱藏 x 2 層 (V8 標準配置)</p>\n                        <p><strong>📋 技術指標:</strong> 44 個</p>\n                        <p><strong>📊 訓練 Epochs:</strong> 150</p>\n                        <p><strong>📉 Loss 函數:</strong> MSE</p>\n                        <p><strong>✨ 優化:</strong> Adam 優化器</p>\n                        <p><strong>📁 模型路徑:</strong> models/backup_v8/SOL_model.pth</p>\n                    </div>\n                </div>\n            </div>\n            \n            <footer>\n                <p>📊 SOL V8 預測 | 生成日期: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>\n                <p style=\"margin-top: 10px;\">Data from CCXT / Binance API</p>\n            </footer>\n        </div>\n    </body>\n    </html>\n    \"\"\"\n    \n    with open('SOL_predictions_v8.html', 'w', encoding='utf-8') as f:\n        f.write(html_content)\n    \n    logger.info(\"✓ 保存: SOL_predictions_v8.html\")\n    \n    logger.info(\"\\n\" + \"=\"*60)\n    logger.info(\"✅ 完成！\")\n    logger.info(\"=\"*60)\n    logger.info(f\"\\n📄 生成的文件:\")\n    logger.info(f\"  - SOL_predictions_v8.png (價格路徑對比)\")\n    logger.info(f\"  - SOL_metrics_v8.png (性能指標)\")\n    logger.info(f\"  - SOL_predictions_v8.html (HTML報告)\")\n    logger.info(f\"\\n🌐 在瀏覽器中打開: SOL_predictions_v8.html\")\n\n\nif __name__ == '__main__':\n    main()\n
+    # 3. Generate HTML report
+    html_content = create_html_report(result)
+    
+    with open('SOL_predictions_v8.html', 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    
+    logger.info("✓ Saved: SOL_predictions_v8.html")
+    
+    logger.info("\n" + "="*60)
+    logger.info("Completed Successfully!")
+    logger.info("="*60)
+    logger.info(f"\nGenerated Files:")
+    logger.info(f"  - SOL_predictions_v8.png (Price comparison chart)")
+    logger.info(f"  - SOL_metrics_v8.png (Performance metrics)")
+    logger.info(f"  - SOL_predictions_v8.html (HTML report)")
+    logger.info(f"\nOpen in browser: SOL_predictions_v8.html")
+
+
+if __name__ == '__main__':
+    main()
