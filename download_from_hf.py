@@ -8,7 +8,9 @@ Usage:
 
 Features:
   - Auto-finds .env file in project root and parent directories
-  - Reads HF_TOKEN from .env file (optional, for private repos)
+  - Robust .env file reading with encoding support
+  - Reads HUGGINGFACE_TOKEN from .env file (also supports HF_TOKEN)
+  - Reads HUGGINGFACE_REPO_ID from .env file (also supports HF_REPO_ID)
   - Downloads entire models/ folder
   - Downloads bias_corrections_v8.json
   - Downloads bot_predictor.py
@@ -19,7 +21,7 @@ Sets up:
   - bot_predictor.py
 
 Requires:
-  - .env file with HF_TOKEN (optional, unless repo is private)
+  - .env file with HUGGINGFACE_TOKEN (optional, unless repo is private)
   - huggingface_hub package
 """
 
@@ -34,7 +36,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Configuration
-HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change if needed
 MODEL_DIR = "models/saved"
 
 
@@ -80,6 +81,106 @@ def find_env_file():
     return None
 
 
+def read_env_file(env_path):
+    """
+    強化版 .env 檔案讀取
+    支持多種編碼和格式
+    """
+    env_dict = {}
+    
+    try:
+        # 嘗試多種編碼
+        encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']
+        
+        for encoding in encodings:
+            try:
+                with open(env_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                logger.info(f"✓ Successfully read .env with encoding: {encoding}")
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            logger.error(f"✗ Could not read .env file with any encoding")
+            return env_dict
+        
+        # 解析 .env 檔案
+        for line in content.split('\n'):
+            line = line.strip()
+            
+            # 跳過空行和註釋
+            if not line or line.startswith('#'):
+                continue
+            
+            # 解析 KEY=VALUE
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                # 移除引號
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    value = value[1:-1]
+                
+                # 移除行末註釋
+                if '#' in value:
+                    value = value.split('#')[0].strip()
+                
+                env_dict[key] = value
+        
+        logger.info(f"✓ Parsed {len(env_dict)} variables from .env")
+        return env_dict
+    
+    except Exception as e:
+        logger.error(f"✗ Error reading .env file: {e}")
+        return env_dict
+
+
+def get_hf_token():
+    """
+    取得 HuggingFace Token
+    支援多種名稱:
+    - HUGGINGFACE_TOKEN (推薦)
+    - HF_TOKEN
+    """
+    token = os.getenv('HUGGINGFACE_TOKEN')
+    if token:
+        logger.info(f"✓ Using HUGGINGFACE_TOKEN: {token[:20]}...")
+        return token
+    
+    token = os.getenv('HF_TOKEN')
+    if token:
+        logger.info(f"✓ Using HF_TOKEN: {token[:20]}...")
+        return token
+    
+    return None
+
+
+def get_hf_repo_id():
+    """
+    取得 HuggingFace Repo ID
+    支援多種名稱:
+    - HUGGINGFACE_REPO_ID (推薦)
+    - HF_REPO_ID
+    預設: caizongxun/crypto-price-predictor-v8
+    """
+    repo_id = os.getenv('HUGGINGFACE_REPO_ID')
+    if repo_id:
+        logger.info(f"✓ Using HUGGINGFACE_REPO_ID: {repo_id}")
+        return repo_id
+    
+    repo_id = os.getenv('HF_REPO_ID')
+    if repo_id:
+        logger.info(f"✓ Using HF_REPO_ID: {repo_id}")
+        return repo_id
+    
+    default_repo = "caizongxun/crypto-price-predictor-v8"
+    logger.info(f"ℹ️  Using default HUGGINGFACE_REPO_ID: {default_repo}")
+    return default_repo
+
+
 def ensure_directories():
     """Ensure required directories exist"""
     Path(MODEL_DIR).mkdir(parents=True, exist_ok=True)
@@ -89,14 +190,15 @@ def ensure_directories():
 def download_models_from_hf():
     """Download all model files from HuggingFace"""
     
-    hf_token = os.getenv('HF_TOKEN', None)  # Optional for public repos
+    hf_token = get_hf_token()  # Optional for public repos
+    hf_repo_id = get_hf_repo_id()
     
     try:
-        logger.info(f"\n📦 Downloading models from {HF_REPO_ID}...")
+        logger.info(f"\n📦 Downloading models from {hf_repo_id}...")
         
         # Get all files in repo
         files = list_repo_files(
-            repo_id=HF_REPO_ID,
+            repo_id=hf_repo_id,
             repo_type="model",
             token=hf_token
         )
@@ -115,7 +217,7 @@ def download_models_from_hf():
         
         try:
             snapshot_download(
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 allow_patterns=["models/*.pth"],  # Only .pth files
                 local_dir=".",
@@ -133,7 +235,7 @@ def download_models_from_hf():
                 
                 try:
                     hf_hub_download(
-                        repo_id=HF_REPO_ID,
+                        repo_id=hf_repo_id,
                         filename=model_file,
                         repo_type="model",
                         local_dir=".",
@@ -161,14 +263,15 @@ def download_config_files():
     
     logger.info(f"\n📄 Downloading configuration files...")
     
-    hf_token = os.getenv('HF_TOKEN', None)
+    hf_token = get_hf_token()
+    hf_repo_id = get_hf_repo_id()
     
     for remote_file, local_file in config_files:
         try:
             logger.info(f"  Downloading {remote_file}...")
             
             hf_hub_download(
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 filename=remote_file,
                 repo_type="model",
                 local_dir=".",
@@ -227,7 +330,6 @@ def main():
     logger.info("="*60)
     logger.info("HuggingFace Model Downloader - V8 Models")
     logger.info("="*60)
-    logger.info(f"Repository: {HF_REPO_ID}")
     logger.info(f"Target Directory: {MODEL_DIR}")
     
     # 自動搜尋並加載 .env
@@ -239,9 +341,12 @@ def main():
         logger.warning("⚠️  No .env file found, trying system environment")
         load_dotenv()  # 使用系統預設路徑
     
-    hf_token = os.getenv('HF_TOKEN', None)
+    hf_token = get_hf_token()
+    hf_repo_id = get_hf_repo_id()
+    
+    logger.info(f"Repository: {hf_repo_id}")
     if hf_token:
-        logger.info(f"✓ HF_TOKEN loaded: {hf_token[:20]}...")
+        logger.info(f"✓ HF_TOKEN loaded")
     else:
         logger.info(f"ℹ️  No HF_TOKEN found (OK for public repos)")
     
