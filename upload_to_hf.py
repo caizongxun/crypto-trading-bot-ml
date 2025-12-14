@@ -9,13 +9,13 @@ Usage:
 Features:
   - Auto-finds .env file in project root and parent directories
   - Robust .env file reading with encoding support
-  - Reads HF_TOKEN from .env file
+  - Reads HUGGINGFACE_TOKEN from .env file (also supports HF_TOKEN)
   - Uploads entire models/saved/ folder at once (avoids API rate limiting)
   - Uploads bias corrections and bot predictor
   - Creates README.md for HF repo
 
 Requires:
-  - .env file with HF_TOKEN
+  - .env file with HUGGINGFACE_TOKEN or HF_TOKEN
   - huggingface_hub package
   - All models in models/saved/
   - bias_corrections_v8.json in models/
@@ -32,7 +32,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Configuration
-HF_REPO_ID = "caizongxun/crypto-price-predictor-v8"  # Change to your HF username
 MODEL_DIR = "models/saved"
 CONFIG_FILE = "models/bias_corrections_v8.json"
 README_PATH = "README_HF.md"
@@ -83,7 +82,7 @@ def find_env_file():
 def read_env_file(env_path):
     """
     強化版 .env 檔案讀取
-    支持多種編碼和格式
+    支援多種編碼和格式
     """
     env_dict = {}
     
@@ -136,6 +135,49 @@ def read_env_file(env_path):
     except Exception as e:
         logger.error(f"✗ Error reading .env file: {e}")
         return env_dict
+
+
+def get_hf_token():
+    """
+    取得 HuggingFace Token
+    支援多種名稱:
+    - HUGGINGFACE_TOKEN (推薦)
+    - HF_TOKEN
+    """
+    token = os.getenv('HUGGINGFACE_TOKEN')
+    if token:
+        logger.info(f"✓ Using HUGGINGFACE_TOKEN: {token[:20]}...")
+        return token
+    
+    token = os.getenv('HF_TOKEN')
+    if token:
+        logger.info(f"✓ Using HF_TOKEN: {token[:20]}...")
+        return token
+    
+    return None
+
+
+def get_hf_repo_id():
+    """
+    取得 HuggingFace Repo ID
+    支援多種名稱:
+    - HUGGINGFACE_REPO_ID (推薦)
+    - HF_REPO_ID
+    預設: caizongxun/crypto-price-predictor-v8
+    """
+    repo_id = os.getenv('HUGGINGFACE_REPO_ID')
+    if repo_id:
+        logger.info(f"✓ Using HUGGINGFACE_REPO_ID: {repo_id}")
+        return repo_id
+    
+    repo_id = os.getenv('HF_REPO_ID')
+    if repo_id:
+        logger.info(f"✓ Using HF_REPO_ID: {repo_id}")
+        return repo_id
+    
+    default_repo = "caizongxun/crypto-price-predictor-v8"
+    logger.info(f"ℹ️  Using default HUGGINGFACE_REPO_ID: {default_repo}")
+    return default_repo
 
 
 def create_readme():
@@ -291,25 +333,27 @@ def upload_to_hf():
         logger.warning("⚠️  No .env file found, trying system environment")
         load_dotenv()  # 使用系統預設路徑
     
-    # 檢查 token
-    hf_token = os.getenv('HF_TOKEN')
+    # 取得 token 和 repo ID
+    hf_token = get_hf_token()
+    hf_repo_id = get_hf_repo_id()
     
-    # Debug: 輸出已加載的 tokens (隱藏敏感信息)
+    # Debug: 輸出已加載的環境變數
     logger.info("\nLoaded environment variables:")
     for key in sorted(os.environ.keys()):
-        if 'TOKEN' in key or 'KEY' in key or 'PASSWORD' in key or 'SECRET' in key:
+        if 'TOKEN' in key or 'KEY' in key or 'PASSWORD' in key or 'SECRET' in key or 'REPO' in key:
             value = os.environ[key]
             masked = f"{value[:10]}..." if len(value) > 10 else "(empty)"
             logger.info(f"  {key}: {masked}")
     
     if not hf_token:
-        logger.error("✗ HF_TOKEN not found!")
+        logger.error("✗ HUGGINGFACE_TOKEN not found!")
         logger.error("")
         logger.error("Please check your .env file:")
-        logger.error("  1. .env file should contain: HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
-        logger.error("  2. Make sure there are NO spaces around the = sign")
-        logger.error("  3. Make sure HF_TOKEN is not wrapped in quotes")
-        logger.error("  4. Make sure there are no extra spaces at the end of the line")
+        logger.error("  1. .env file should contain: HUGGINGFACE_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
+        logger.error("  2. Or use: HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx")
+        logger.error("  3. Make sure there are NO spaces around the = sign")
+        logger.error("  4. Make sure HUGGINGFACE_TOKEN is not wrapped in quotes")
+        logger.error("  5. Make sure there are no extra spaces at the end of the line")
         logger.error("")
         
         # 嘗試讀取 .env 並輸出前 10 行
@@ -331,7 +375,8 @@ def upload_to_hf():
         
         return False
     
-    logger.info(f"✓ HF_TOKEN loaded: {hf_token[:20]}...")
+    logger.info(f"✓ HUGGINGFACE_TOKEN loaded successfully")
+    logger.info(f"✓ Repository: {hf_repo_id}")
     
     # 創建 README
     create_readme()
@@ -341,10 +386,10 @@ def upload_to_hf():
         api = HfApi()
         
         # 創建倉庫
-        logger.info(f"Creating/accessing repo: {HF_REPO_ID}")
+        logger.info(f"Creating/accessing repo: {hf_repo_id}")
         try:
             repo_url = api.create_repo(
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 exist_ok=True,
                 private=False,  # Set to True if private
@@ -374,7 +419,7 @@ def upload_to_hf():
         try:
             api.upload_folder(
                 folder_path=MODEL_DIR,
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 token=hf_token,
                 path_in_repo="models",  # Upload to models/ subfolder in HF
@@ -390,7 +435,7 @@ def upload_to_hf():
             try:
                 api.upload_folder(
                     folder_path=MODEL_DIR,
-                    repo_id=HF_REPO_ID,
+                    repo_id=hf_repo_id,
                     repo_type="model",
                     token=hf_token,
                     path_in_repo="models",
@@ -408,7 +453,7 @@ def upload_to_hf():
                 api.upload_file(
                     path_or_fileobj=CONFIG_FILE,
                     path_in_repo="bias_corrections_v8.json",
-                    repo_id=HF_REPO_ID,
+                    repo_id=hf_repo_id,
                     repo_type="model",
                     token=hf_token,
                     commit_message="Upload bias corrections configuration"
@@ -425,7 +470,7 @@ def upload_to_hf():
             api.upload_file(
                 path_or_fileobj="bot_predictor.py",
                 path_in_repo="bot_predictor.py",
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 token=hf_token,
                 commit_message="Upload bot predictor module"
@@ -440,7 +485,7 @@ def upload_to_hf():
             api.upload_file(
                 path_or_fileobj=README_PATH,
                 path_in_repo="README.md",
-                repo_id=HF_REPO_ID,
+                repo_id=hf_repo_id,
                 repo_type="model",
                 token=hf_token,
                 commit_message="Upload README documentation"
@@ -452,7 +497,7 @@ def upload_to_hf():
         logger.info(f"\n" + "="*60)
         logger.info(f"✅ Upload Complete!")
         logger.info(f"="*60)
-        logger.info(f"Repository: https://huggingface.co/{HF_REPO_ID}")
+        logger.info(f"Repository: https://huggingface.co/{hf_repo_id}")
         logger.info(f"Models: {len(model_files)} files uploaded")
         logger.info(f"="*60)
         return True
