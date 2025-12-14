@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-全幣種 V8 可視化工具 - 自動讀取 models/backup_v8 底下的所有模型
+全幣種 V8 可視化工具 - 自動讀取 models/saved 底下的所有模型
 
 用法:
   python visualize_all_v8.py              # 所有幣種
@@ -59,19 +59,21 @@ def setup_logging():
 
 
 def get_available_models():
-    """獲取 models/backup_v8 中所有可用的模型"""
-    backup_dir = 'models/backup_v8'
-    if not os.path.exists(backup_dir):
-        logger.error(f"❌ 目錄不存在: {backup_dir}")
+    """獲取 models/saved 中所有可用的模型"""
+    saved_dir = 'models/saved'
+    if not os.path.exists(saved_dir):
+        logger.error(f"❌ 目錄不存在: {saved_dir}")
         return []
     
     models = []
-    for file in os.listdir(backup_dir):
-        if file.endswith('_model.pth'):
-            symbol = file.replace('_model.pth', '').upper()
-            models.append(symbol)
+    for file in os.listdir(saved_dir):
+        if file.endswith('_model.pth') or file.endswith('.pth'):
+            # 提取符號名稱
+            symbol = file.replace('_model.pth', '').replace('_model_v8.pth', '').replace('.pth', '').upper()
+            if symbol:
+                models.append(symbol)
     
-    return sorted(models)
+    return sorted(list(set(models)))  # 去重並排序
 
 
 def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
@@ -202,6 +204,25 @@ class RegressionLSTM(torch.nn.Module):
         return price
 
 
+def find_model_file(symbol: str):
+    """查找模型文件"""
+    saved_dir = 'models/saved'
+    
+    # 嘗試幾種命名方式
+    possible_names = [
+        f'{symbol}_model_v8.pth',
+        f'{symbol}_model.pth',
+        f'{symbol}.pth',
+    ]
+    
+    for name in possible_names:
+        path = os.path.join(saved_dir, name)
+        if os.path.exists(path):
+            return path
+    
+    return None
+
+
 def predict_symbol(symbol: str):
     """預測單個幣種"""
     logger.info(f"\n{'='*60}")
@@ -253,9 +274,15 @@ def predict_symbol(symbol: str):
     logger.info(f"  ✓ 數據分割: Train={train_size}, Val={val_size}, Test={len(X_test)}")
     
     # 加載模型
-    model_path = f'models/backup_v8/{symbol}_model.pth'
-    if not os.path.exists(model_path):
-        logger.error(f"  ❌ 找不到 {symbol} 模型: {model_path}")
+    model_path = find_model_file(symbol)
+    if not model_path:
+        logger.error(f"  ❌ 找不到 {symbol} 模型")
+        logger.info(f"\n  📁 在 models/saved 中查詢 {symbol} 相關文件...")
+        saved_dir = 'models/saved'
+        if os.path.exists(saved_dir):
+            files = [f for f in os.listdir(saved_dir) if symbol.lower() in f.lower()]
+            if files:
+                logger.info(f"     找到: {files}")
         return None
     
     model = RegressionLSTM()
@@ -511,9 +538,9 @@ def create_html_report(results):
                     <p><strong>🧠 網絡結構:</strong> 128 隱藏 x 2 層 (V8 標準)</p>
                     <p><strong>📋 技術指標:</strong> 44 個</p>
                     <p><strong>🎓 訓練 Epochs:</strong> 150</p>
-                    <p><strong>📉 Loss 函數:</strong> MSE (Mean Squared Error)</p>
+                    <p><strong>📄 Loss 函數:</strong> MSE (Mean Squared Error)</p>
                     <p><strong>⚙️ 優化器:</strong> Adam</p>
-                    <p><strong>📁 模型路徑:</strong> models/backup_v8/</p>
+                    <p><strong>📁 模型路徑:</strong> models/saved/</p>
                 </div>
             </div>
         </div>
@@ -541,21 +568,28 @@ def main():
     logger.info('\n' + '='*60)
     logger.info('V8 全幣種可視化工具')
     logger.info('='*60)
+    logger.info(f"\n📁 模型位置: models/saved/")
+    logger.info(f"💾 設備: {device}")
     
     # 獲取可用的模型
     available_models = get_available_models()
     if not available_models:
         logger.error("\n❌ 找不到任何 V8 模型")
+        logger.info("\n📝 請確認:")
+        logger.info("   1. models/saved 資料夾存在")
+        logger.info("   2. 模型文件已複製到 models/saved")
+        logger.info("   3. 模型文件名格式: {SYMBOL}_model_v8.pth 或 {SYMBOL}_model.pth")
         return
     
     logger.info(f"\n✓ 找到 {len(available_models)} 個模型: {', '.join(available_models)}")
     
     # 決定要處理的幣種
     if args.symbol:
-        symbols = [s.upper() for s in args.symbol.split(',')]
+        symbols = [s.upper().strip() for s in args.symbol.split(',')]
         symbols = [s for s in symbols if s in available_models]
         if not symbols:
             logger.error(f"❌ 指定的幣種不在可用模型中")
+            logger.info(f"   可用: {', '.join(available_models)}")
             return
     else:
         symbols = available_models
@@ -564,7 +598,8 @@ def main():
     
     # 處理每個幣種
     results = []
-    for symbol in symbols:
+    for i, symbol in enumerate(symbols, 1):
+        logger.info(f"\n[{i}/{len(symbols)}] 處理 {symbol}...")
         result = predict_symbol(symbol)
         if result:
             results.append(result)
@@ -592,13 +627,15 @@ def main():
             plt.savefig(f'{symbol}_predictions_v8.png', dpi=120, bbox_inches='tight')
             logger.info(f"    ✓ 已保存: {symbol}_predictions_v8.png")
             plt.close()
+        else:
+            logger.warning(f"  ⚠️ {symbol} 預測失敗，已跳過")
     
     if not results:
         logger.error("\n❌ 沒有成功生成預測")
         return
     
     # 生成 HTML 報告
-    logger.info(f"\n📄 生成 HTML 報告...")
+    logger.info(f"\n📋 生成 HTML 報告...")
     html_content = create_html_report(results)
     
     with open('predictions_v8_report.html', 'w', encoding='utf-8') as f:
