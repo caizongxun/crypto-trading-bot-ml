@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-LSTM 訓練腳本 V7 - 混合模式
+LSTM 訓練腳本 V7 - 混合模式 (修正版)
 
 策略：
 - 主任務：價格回歸 (V1 証實有效)
@@ -11,7 +11,7 @@ LSTM 訓練腳本 V7 - 混合模式
 為何 V7 會成功？
 1. 價格予測是已穗詩群的目標
 2. 方向是年外群
-3. 兩者合作會蓮雲提佋
+3. 兩者合作會蓮雲提低
 用法:
   python training/train_lstm_v7_hybrid.py --symbol SOL
   python training/train_lstm_v7_hybrid.py --symbol BTC --direction-weight 0.3
@@ -54,9 +54,9 @@ DEFAULT_CONFIG = {
     },
     'training': {
         'epochs': 150,
-        'batch_size': 16,
-        'learning_rate': 0.0005,
-        'weight_decay': 0.0001,
+        'batch_size': 8,  # 降低 batch size
+        'learning_rate': 0.0001,  # 降低学习率
+        'weight_decay': 0.00001,  # 降低設氣衷衰
         'lookback_window': 60,
         'train_split': 0.8,
         'val_split': 0.1,
@@ -68,6 +68,7 @@ DEFAULT_CONFIG = {
         'scheduler': 'cosine',
         'patience': 20,
         'min_delta': 1e-6,
+        'grad_clip': 0.5,  # 梅度袪断
     },
     'data': {
         'timeframe': '1h',
@@ -241,6 +242,7 @@ def train_epoch(model, train_loader, optimizer, device, config):
     """訓練一個 epoch"""
     model.train()
     total_loss = 0
+    nan_count = 0
     
     for X_batch, y_price, y_dir in train_loader:
         X_batch = X_batch.to(device).float()
@@ -259,13 +261,21 @@ def train_epoch(model, train_loader, optimizer, device, config):
         loss = price_loss * (1 - config['training']['direction_weight']) + \
                 direction_loss * config['training']['direction_weight']
         
+        # 抪斷 NaN
+        if torch.isnan(loss):
+            nan_count += 1
+            continue
+        
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config['optimization']['grad_clip'])
         optimizer.step()
         
         total_loss += loss.item()
     
-    return total_loss / len(train_loader)
+    if nan_count > 0:
+        logger.warning(f"  Warning: {nan_count} NaN batches skipped")
+    
+    return total_loss / max(len(train_loader) - nan_count, 1)
 
 
 def validate(model, val_loader, device, config):
@@ -287,19 +297,19 @@ def validate(model, val_loader, device, config):
             loss = price_loss * (1 - config['training']['direction_weight']) + \
                     direction_loss * config['training']['direction_weight']
             
-            total_loss += loss.item()
+            if not torch.isnan(loss):
+                total_loss += loss.item()
     
     return total_loss / len(val_loader)
 
 
-def backup_models(symbol: str):
-    """備份前鼠版本模型"""
+def cleanup_old_models(symbol: str):
+    """清理叨篆的老模型"""
     current_path = f'models/saved/{symbol}_model.pth'
-    
     if os.path.exists(current_path):
         os.makedirs('models/backup_v6', exist_ok=True)
-        shutil.copy(current_path, f'models/backup_v6/{symbol}_model_v6.pth')
-        logger.info(f"✓ v6 model backed up")
+        shutil.move(current_path, f'models/backup_v6/{symbol}_model_v6_old.pth')
+        logger.info(f"✓ Cleaned up incompatible old model")
 
 
 def main():
@@ -309,8 +319,8 @@ def main():
     parser = argparse.ArgumentParser(description='LSTM Training v7 - Hybrid (Price + Direction)')
     parser.add_argument('--symbol', type=str, default='SOL', help='Trading symbol')
     parser.add_argument('--epochs', type=int, default=150, help='Number of epochs')
-    parser.add_argument('--batch-size', type=int, default=16, help='Batch size')
-    parser.add_argument('--lr', type=float, default=0.0005, help='Learning rate')
+    parser.add_argument('--batch-size', type=int, default=8, help='Batch size')
+    parser.add_argument('--lr', type=float, default=0.0001, help='Learning rate')
     parser.add_argument('--direction-weight', type=float, default=0.2, help='Direction task weight')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda or cpu)')
     
@@ -320,13 +330,15 @@ def main():
     setup_logging(args.symbol, version='v7')
     
     logger.info('='*80)
-    logger.info('LSTM MODEL TRAINING (V7 - Hybrid Mode)')
+    logger.info('LSTM MODEL TRAINING (V7 - Hybrid Mode - FIXED)')
     logger.info('='*80)
     logger.info(f"Symbol: {args.symbol}")
     logger.info(f"Device: {args.device}")
     logger.info(f"Epochs: {args.epochs}")
     logger.info(f"Strategy: Price Regression (80%) + Direction Auxiliary (20%)")
     logger.info(f"Direction Weight: {args.direction_weight*100:.1f}%")
+    logger.info(f"Learning Rate: {args.lr}")
+    logger.info(f"Batch Size: {args.batch_size}")
     
     # 加載配置
     config = DEFAULT_CONFIG.copy()
@@ -336,8 +348,8 @@ def main():
     config['training']['direction_weight'] = args.direction_weight
     config['device'] = args.device
     
-    # 備份模型
-    backup_models(args.symbol)
+    # 清理叨篆的老模型
+    cleanup_old_models(args.symbol)
     
     # 1. 獲取數據
     logger.info("\n[1/6] Fetching data...")
@@ -367,8 +379,9 @@ def main():
         padding = np.zeros((X_scaled.shape[0], 44 - X_scaled.shape[1]))
         X_scaled = np.hstack([X_scaled, padding])
     
-    # 正規化方向標籤 ([-1, 1])
-    y_direction_normalized = y_direction / (np.max(np.abs(y_direction)) + 1e-8)
+    # 正規化方向標籤 ([-1, 1]) 並措推 NaN
+    y_direction_normalized = np.clip(y_direction / (np.max(np.abs(y_direction)) + 1e-8), -1, 1)
+    y_direction_normalized = np.nan_to_num(y_direction_normalized, 0.0)
     
     logger.info(f"✓ Feature matrix shape: {X_scaled.shape}")
     
