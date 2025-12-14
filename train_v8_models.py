@@ -149,7 +149,8 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
         df = df.ffill().bfill()
-        df = df.replace([np.inf, -np.inf], np.nan).fillna(method='ffill').fillna(method='bfill')
+        df = df.replace([np.inf, -np.inf], np.nan)
+        df = df.ffill().bfill()
         
         logger.info(f"  Added 44 technical indicators")
         return df
@@ -308,7 +309,7 @@ def predict_symbol(symbol: str):
         weight_decay=MODEL_CONFIG['weight_decay']
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, verbose=False
+        optimizer, mode='min', factor=0.5, patience=10
     )
     
     early_stopping = EarlyStopping(patience=20, min_delta=1e-4)
