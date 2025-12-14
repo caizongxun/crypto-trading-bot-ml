@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-全幣種 V8 可視化工具 - 自動讀取 models/saved 底下的所有模型
+All Cryptocurrency V8 Visualization Tool - Auto detect model architecture
 
-用法:
-  python visualize_all_v8.py              # 所有幣種
-  python visualize_all_v8.py --symbol SOL # 單個幣種
-  python visualize_all_v8.py --symbol BTC,ETH # 多個幣種
+Usage:
+  python visualize_all_v8.py              # All symbols
+  python visualize_all_v8.py --symbol SOL # Single symbol
+  python visualize_all_v8.py --symbol BTC,ETH,SOL # Multiple symbols
 """
 
 import os
@@ -36,10 +36,9 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 logger = None
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# V8 配置 (44 個技術指標)
 MODEL_CONFIG = {
     'input_size': 44,
-    'hidden_size': 128,
+    'hidden_size': 64,
     'num_layers': 2,
     'dropout': 0.3,
     'bidirectional': True,
@@ -59,21 +58,51 @@ def setup_logging():
 
 
 def get_available_models():
-    """獲取 models/saved 中所有可用的模型"""
     saved_dir = 'models/saved'
     if not os.path.exists(saved_dir):
-        logger.error(f"❌ 目錄不存在: {saved_dir}")
+        logger.error(f"Error: Directory not found: {saved_dir}")
         return []
     
     models = []
     for file in os.listdir(saved_dir):
-        if file.endswith('_model.pth') or file.endswith('.pth'):
-            # 提取符號名稱
-            symbol = file.replace('_model.pth', '').replace('_model_v8.pth', '').replace('.pth', '').upper()
+        if file.endswith('_model_v8.pth') or file.endswith('.pth'):
+            symbol = file.replace('_model_v8.pth', '').replace('_model.pth', '').replace('.pth', '').upper()
             if symbol:
                 models.append(symbol)
     
-    return sorted(list(set(models)))  # 去重並排序
+    return sorted(list(set(models)))
+
+
+def detect_model_config(state_dict):
+    """Detect model architecture from saved weights"""
+    try:
+        # Detect hidden size from LSTM weights
+        weight_ih = state_dict.get('lstm.weight_ih_l0')
+        if weight_ih is not None:
+            # weight_ih shape: [4*hidden_size, input_size]
+            hidden_size = weight_ih.shape[0] // 4
+        else:
+            hidden_size = 64
+        
+        # Detect if bidirectional
+        bidirectional = 'lstm.weight_ih_l0_reverse' in state_dict
+        
+        # Detect num_layers
+        num_layers = 1
+        layer = 1
+        while f'lstm.weight_ih_l{layer}' in state_dict:
+            num_layers += 1
+            layer += 1
+        
+        return {
+            'hidden_size': hidden_size,
+            'num_layers': num_layers,
+            'bidirectional': bidirectional,
+            'dropout': 0.3,
+        }
+    except Exception as e:
+        logger.warning(f"Could not detect config: {e}, using defaults")
+        return MODEL_CONFIG.copy()
 
 
 def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
@@ -81,7 +110,7 @@ def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
         exchange = ccxt.binance({'enableRateLimit': True})
         symbol_pair = f"{symbol}/USDT"
         
-        logger.info(f"  📊 接取 {limit} 根蠟燭圖 {symbol}/{timeframe}...")
+        logger.info(f"    Fetching {limit} candles {symbol}/{timeframe}...")
         ohlcv = exchange.fetch_ohlcv(symbol_pair, timeframe, limit=limit)
         
         df = pd.DataFrame(
@@ -92,23 +121,21 @@ def fetch_data(symbol: str, timeframe: str = '1h', limit: int = 1000):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df = df.sort_values('timestamp').reset_index(drop=True)
         
-        logger.info(f"  ✓ 接取完成 {len(df)} 根蠟燭圖")
+        logger.info(f"    Got {len(df)} candles")
         return df
     
     except Exception as e:
-        logger.error(f"  ❌ 接取數據失敗: {e}")
+        logger.error(f"    Error fetching data: {e}")
         return None
 
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """添加 44 個技術指標 (V8 版本)"""
+    """Add 44 technical indicators (V8 version)"""
     try:
-        # 基本作用
         df['high-low'] = df['high'] - df['low']
         df['close-open'] = df['close'] - df['open']
         df['returns'] = df['close'].pct_change()
         
-        # RSI
         for period in [14, 21]:
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -116,50 +143,44 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
             rs = gain / loss
             df[f'rsi_{period}'] = 100 - (100 / (1 + rs))
         
-        # MACD
         ema12 = df['close'].ewm(span=12).mean()
         ema26 = df['close'].ewm(span=26).mean()
         df['macd'] = ema12 - ema26
         df['macd_signal'] = df['macd'].ewm(span=9).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
         
-        # Bollinger Bands
         sma20 = df['close'].rolling(window=20).mean()
         std20 = df['close'].rolling(window=20).std()
         df['bb_upper'] = sma20 + (std20 * 2)
         df['bb_middle'] = sma20
         df['bb_lower'] = sma20 - (std20 * 2)
         
-        # ATR
         tr1 = df['high'] - df['low']
         tr2 = abs(df['high'] - df['close'].shift())
         tr3 = abs(df['low'] - df['close'].shift())
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['atr'] = tr.rolling(window=14).mean()
         
-        # 動量
         df['momentum'] = df['close'].diff(10)
         
-        # CCI
         tp = (df['high'] + df['low'] + df['close']) / 3
         df['cci'] = (tp - tp.rolling(window=20).mean()) / (0.015 * tp.rolling(window=20).std())
         
-        # 移動平均
         df['sma5'] = df['close'].rolling(window=5).mean()
         df['sma10'] = df['close'].rolling(window=10).mean()
         df['sma20'] = df['close'].rolling(window=20).mean()
         df['sma50'] = df['close'].rolling(window=50).mean()
         
-        # 成交量指標
         df['volume_sma'] = df['volume'].rolling(window=20).mean()
         df['volume_ratio'] = df['volume'] / df['volume_sma']
         
-        df = df.ffill()
+        df = df.ffill().bfill()
+        df = df.replace([np.inf, -np.inf], np.nan).ffill().bfill()
         
         return df
     
     except Exception as e:
-        logger.error(f"  ❌ 添加技術指標失敗: {e}")
+        logger.error(f"    Error adding indicators: {e}")
         return None
 
 
@@ -172,26 +193,26 @@ def prepare_sequences(X, y, lookback=60):
 
 
 class RegressionLSTM(torch.nn.Module):
-    """V8 LSTM 模型"""
+    """V8 LSTM Model with flexible architecture"""
     
-    def __init__(self):
+    def __init__(self, input_size=44, hidden_size=64, num_layers=2, dropout=0.3, bidirectional=True):
         super(RegressionLSTM, self).__init__()
         
         self.lstm = torch.nn.LSTM(
-            input_size=MODEL_CONFIG['input_size'],
-            hidden_size=MODEL_CONFIG['hidden_size'],
-            num_layers=MODEL_CONFIG['num_layers'],
-            dropout=MODEL_CONFIG['dropout'],
-            bidirectional=MODEL_CONFIG['bidirectional'],
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0,
+            bidirectional=bidirectional,
             batch_first=True
         )
         
-        lstm_output_size = MODEL_CONFIG['hidden_size'] * 2
+        lstm_output_size = hidden_size * (2 if bidirectional else 1)
         
         self.regressor = torch.nn.Sequential(
             torch.nn.Linear(lstm_output_size, 64),
             torch.nn.ReLU(),
-            torch.nn.Dropout(MODEL_CONFIG['dropout']),
+            torch.nn.Dropout(dropout),
             torch.nn.Linear(64, 32),
             torch.nn.ReLU(),
             torch.nn.Linear(32, 1)
@@ -205,10 +226,8 @@ class RegressionLSTM(torch.nn.Module):
 
 
 def find_model_file(symbol: str):
-    """查找模型文件"""
     saved_dir = 'models/saved'
     
-    # 嘗試幾種命名方式
     possible_names = [
         f'{symbol}_model_v8.pth',
         f'{symbol}_model.pth',
@@ -224,24 +243,23 @@ def find_model_file(symbol: str):
 
 
 def predict_symbol(symbol: str):
-    """預測單個幣種"""
     logger.info(f"\n{'='*60}")
-    logger.info(f"🚀 處理 {symbol} (V8 穩定模型)...")
+    logger.info(f"Processing {symbol} (V8 Model)...")
     logger.info(f"{'='*60}")
     
-    # 接取數據
+    # Fetch data
     df = fetch_data(symbol)
     if df is None or len(df) == 0:
-        logger.error(f"  ❌ 接取 {symbol} 數據失敗")
+        logger.error(f"  Error: Failed to fetch {symbol} data")
         return None
     
-    # 添加技術指標
+    # Add indicators
     df = add_technical_indicators(df)
     if df is None:
-        logger.error(f"  ❌ 添加技術指標失敗")
+        logger.error(f"  Error: Failed to add indicators")
         return None
     
-    # 特徵提取
+    # Extract features
     feature_cols = [col for col in df.columns if col not in ['timestamp', 'close']]
     X = df[feature_cols].values
     y = df['close'].values
@@ -251,19 +269,18 @@ def predict_symbol(symbol: str):
     X_scaled = scaler_X.fit_transform(X)
     y_scaled = scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
     
-    # 確保 X 的特徵數為 44
     if X_scaled.shape[1] > 44:
         X_scaled = X_scaled[:, :44]
     elif X_scaled.shape[1] < 44:
         padding = np.zeros((X_scaled.shape[0], 44 - X_scaled.shape[1]))
         X_scaled = np.hstack([X_scaled, padding])
     
-    logger.info(f"  ✓ 特徵矩陣 (V8): {X_scaled.shape}")
+    logger.info(f"  Feature shape (V8): {X_scaled.shape}")
     
-    # 準備序列
+    # Prepare sequences
     X_seq, y_seq = prepare_sequences(X_scaled, y_scaled, 60)
     
-    # train/val/test 分割
+    # Split data
     n_samples = len(X_seq)
     train_size = int(n_samples * 0.8)
     val_size = int(n_samples * 0.1)
@@ -271,52 +288,58 @@ def predict_symbol(symbol: str):
     X_test = X_seq[train_size+val_size:]
     y_test = y_seq[train_size+val_size:]
     
-    logger.info(f"  ✓ 數據分割: Train={train_size}, Val={val_size}, Test={len(X_test)}")
+    logger.info(f"  Data split: Train={train_size}, Val={val_size}, Test={len(X_test)}")
     
-    # 加載模型
+    # Find and load model
     model_path = find_model_file(symbol)
     if not model_path:
-        logger.error(f"  ❌ 找不到 {symbol} 模型")
-        logger.info(f"\n  📁 在 models/saved 中查詢 {symbol} 相關文件...")
-        saved_dir = 'models/saved'
-        if os.path.exists(saved_dir):
-            files = [f for f in os.listdir(saved_dir) if symbol.lower() in f.lower()]
-            if files:
-                logger.info(f"     找到: {files}")
+        logger.error(f"  Error: Model not found for {symbol}")
         return None
     
-    model = RegressionLSTM()
+    # Load weights to detect architecture
+    state_dict = torch.load(model_path, map_location=device)
+    detected_config = detect_model_config(state_dict)
+    
+    logger.info(f"  Detected config: hidden_size={detected_config['hidden_size']}, num_layers={detected_config['num_layers']}")
+    
+    # Create model with detected architecture
+    model = RegressionLSTM(
+        input_size=44,
+        hidden_size=detected_config['hidden_size'],
+        num_layers=detected_config['num_layers'],
+        dropout=detected_config['dropout'],
+        bidirectional=detected_config['bidirectional']
+    )
     model.to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(state_dict)
     model.eval()
     
-    logger.info(f"  ✓ V8 模型加載成功 (44 個技術指標)")
-    logger.info(f"     路徑: {model_path}")
+    logger.info(f"  Model loaded successfully")
     
-    # 預測
+    # Predict
     with torch.no_grad():
         test_prices = []
         test_trues = []
         
         for i in range(0, len(X_test), 32):
-            X_batch = torch.tensor(X_test[i:i+32]).to(device).float()
+            X_batch = torch.tensor(X_test[i:i+32], dtype=torch.float32).to(device)
             price = model(X_batch)
             test_prices.extend(price.cpu().numpy().flatten())
             test_trues.extend(y_test[i:i+32])
     
-    # 反正規化
+    # Inverse transform
     test_prices_inverse = scaler_y.inverse_transform(np.array(test_prices).reshape(-1, 1)).flatten()
     test_trues_inverse = scaler_y.inverse_transform(np.array(test_trues).reshape(-1, 1)).flatten()
     
-    # 計算指標
+    # Calculate metrics
     mae = mean_absolute_error(test_trues_inverse, test_prices_inverse)
     mape = mean_absolute_percentage_error(test_trues_inverse, test_prices_inverse)
     rmse = np.sqrt(mean_squared_error(test_trues_inverse, test_prices_inverse))
     
-    logger.info(f"\n  📊 性能指標:")
-    logger.info(f"     MAE:  {mae:.6f} USD")
-    logger.info(f"     MAPE: {mape:.4f} %")
-    logger.info(f"     RMSE: {rmse:.6f} USD")
+    logger.info(f"\n  Test Results:")
+    logger.info(f"    MAE:  {mae:.6f} USD")
+    logger.info(f"    MAPE: {mape:.4f} %")
+    logger.info(f"    RMSE: {rmse:.6f} USD")
     
     return {
         'symbol': symbol,
@@ -329,18 +352,14 @@ def predict_symbol(symbol: str):
 
 
 def create_html_report(results):
-    """創建 HTML 報告"""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    # 計算統計
     total_symbols = len(results)
     avg_mae = np.mean([r['mae'] for r in results])
     avg_mape = np.mean([r['mape'] for r in results])
     
-    # 排序結果
     sorted_results = sorted(results, key=lambda x: x['mape'])
     
-    # 生成表格行
     table_rows = ""
     for r in sorted_results:
         table_rows += f"""
@@ -353,11 +372,11 @@ def create_html_report(results):
         """
     
     html = f'''<!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>V8 全幣種預測報告</title>
+    <title>V8 All Cryptocurrency Predictions</title>
     <style>
         * {{
             margin: 0;
@@ -481,33 +500,33 @@ def create_html_report(results):
 <body>
     <div class="container">
         <header>
-            <h1>📊 V8 全幣種預測報告</h1>
-            <p>All Cryptocurrency Predictions - V8 Stable Model</p>
-            <span class="badge">V8 穩定模型</span>
+            <h1>V8 All Cryptocurrency Predictions Report</h1>
+            <p>Multi-Symbol Price Prediction Analysis</p>
+            <span class="badge">V8 Model</span>
         </header>
         
         <div class="stats">
             <div class="stat-card">
-                <div class="stat-label">總幣種數</div>
+                <div class="stat-label">Total Symbols</div>
                 <div class="stat-value">{total_symbols}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">平均 MAE</div>
+                <div class="stat-label">Average MAE</div>
                 <div class="stat-value">{avg_mae:.4f}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-label">平均 MAPE</div>
+                <div class="stat-label">Average MAPE</div>
                 <div class="stat-value">{avg_mape:.4f}%</div>
             </div>
         </div>
         
         <div class="content">
             <div class="section">
-                <h2>📈 所有幣種性能指標</h2>
+                <h2>Performance Metrics</h2>
                 <table>
                     <thead>
                         <tr>
-                            <th>幣種</th>
+                            <th>Symbol</th>
                             <th>MAE (USD)</th>
                             <th>MAPE (%)</th>
                             <th>RMSE (USD)</th>
@@ -520,33 +539,33 @@ def create_html_report(results):
             </div>
             
             <div class="section">
-                <h2>📊 圖表</h2>
-                <p>各幣種的價格預測對比圖已生成為單獨的 PNG 文件:</p>
+                <h2>Visualizations</h2>
+                <p>Generated prediction charts for each symbol:</p>
                 <ul style="margin-left: 20px; margin-top: 10px;">
 '''
     
     for r in sorted_results:
-        html += f"<li><strong>{r['symbol']}_predictions_v8.png</strong> - {r['symbol']} 價格路徑對比圖</li>\n"
+        html += f"<li><strong>{r['symbol']}_predictions_v8.png</strong> - {r['symbol']} price comparison chart</li>\n"
     
     html += f'''
                 </ul>
             </div>
             
             <div class="section">
-                <h2>ℹ️ 模型信息</h2>
+                <h2>Model Information</h2>
                 <div style="background: #f5f5f5; padding: 15px; border-radius: 8px;">
-                    <p><strong>🧠 網絡結構:</strong> 128 隱藏 x 2 層 (V8 標準)</p>
-                    <p><strong>📋 技術指標:</strong> 44 個</p>
-                    <p><strong>🎓 訓練 Epochs:</strong> 150</p>
-                    <p><strong>📄 Loss 函數:</strong> MSE (Mean Squared Error)</p>
-                    <p><strong>⚙️ 優化器:</strong> Adam</p>
-                    <p><strong>📁 模型路徑:</strong> models/saved/</p>
+                    <p><strong>Architecture:</strong> Bidirectional LSTM with 2 layers</p>
+                    <p><strong>Hidden Size:</strong> Auto-detected from saved models</p>
+                    <p><strong>Input Features:</strong> 44 technical indicators</p>
+                    <p><strong>Batch Size:</strong> 64 (optimized)</p>
+                    <p><strong>Learning Rate:</strong> 0.005 (optimized)</p>
+                    <p><strong>Model Path:</strong> models/saved/</p>
                 </div>
             </div>
         </div>
         
         <footer>
-            <p>V8 全幣種預測報告 | 生成日期: {timestamp}</p>
+            <p>V8 All Cryptocurrency Prediction Report | Generated: {timestamp}</p>
             <p style="margin-top: 10px;">Data from CCXT / Binance API</p>
         </footer>
     </div>
@@ -561,53 +580,43 @@ def main():
     
     setup_logging()
     
-    parser = argparse.ArgumentParser(description='V8 全幣種可視化工具')
-    parser.add_argument('--symbol', type=str, default=None, help='幣種符號 (逗號分隔)')
+    parser = argparse.ArgumentParser(description='V8 All Cryptocurrency Visualization Tool')
+    parser.add_argument('--symbol', type=str, default=None, help='Crypto symbols (comma-separated)')
     args = parser.parse_args()
     
     logger.info('\n' + '='*60)
-    logger.info('V8 全幣種可視化工具')
+    logger.info('V8 All Cryptocurrency Visualization Tool')
     logger.info('='*60)
-    logger.info(f"\n📁 模型位置: models/saved/")
-    logger.info(f"💾 設備: {device}")
+    logger.info(f"\nModel location: models/saved/")
+    logger.info(f"Device: {device}")
     
-    # 獲取可用的模型
     available_models = get_available_models()
     if not available_models:
-        logger.error("\n❌ 找不到任何 V8 模型")
-        logger.info("\n📝 請確認:")
-        logger.info("   1. models/saved 資料夾存在")
-        logger.info("   2. 模型文件已複製到 models/saved")
-        logger.info("   3. 模型文件名格式: {SYMBOL}_model_v8.pth 或 {SYMBOL}_model.pth")
+        logger.error("\nError: No models found")
         return
     
-    logger.info(f"\n✓ 找到 {len(available_models)} 個模型: {', '.join(available_models)}")
+    logger.info(f"\nFound {len(available_models)} models: {', '.join(available_models)}")
     
-    # 決定要處理的幣種
     if args.symbol:
         symbols = [s.upper().strip() for s in args.symbol.split(',')]
         symbols = [s for s in symbols if s in available_models]
         if not symbols:
-            logger.error(f"❌ 指定的幣種不在可用模型中")
-            logger.info(f"   可用: {', '.join(available_models)}")
+            logger.error("Error: None of the specified symbols have models")
             return
     else:
         symbols = available_models
     
-    logger.info(f"\n🚀 開始處理 {len(symbols)} 個幣種...\n")
+    logger.info(f"\nProcessing {len(symbols)} symbols...\n")
     
-    # 處理每個幣種
     results = []
     for i, symbol in enumerate(symbols, 1):
-        logger.info(f"\n[{i}/{len(symbols)}] 處理 {symbol}...")
+        logger.info(f"\n[{i}/{len(symbols)}] Processing {symbol}...\n")
         result = predict_symbol(symbol)
         if result:
             results.append(result)
             
-            # 生成每個幣種的圖表
-            logger.info(f"\n  生成 {symbol} 的可視化圖表...")
+            logger.info(f"\n  Generating visualization...")
             
-            # 1. 價格路徑對比圖
             fig, ax = plt.subplots(figsize=(12, 5))
             predicted = result['predicted']
             actual = result['actual']
@@ -625,33 +634,31 @@ def main():
             
             plt.tight_layout()
             plt.savefig(f'{symbol}_predictions_v8.png', dpi=120, bbox_inches='tight')
-            logger.info(f"    ✓ 已保存: {symbol}_predictions_v8.png")
+            logger.info(f"    Saved: {symbol}_predictions_v8.png")
             plt.close()
         else:
-            logger.warning(f"  ⚠️ {symbol} 預測失敗，已跳過")
+            logger.warning(f"  Error: Failed to process {symbol}, skipping")
     
     if not results:
-        logger.error("\n❌ 沒有成功生成預測")
+        logger.error("\nError: No successful predictions")
         return
     
-    # 生成 HTML 報告
-    logger.info(f"\n📋 生成 HTML 報告...")
+    logger.info(f"\nGenerating HTML report...")
     html_content = create_html_report(results)
     
     with open('predictions_v8_report.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
     
-    logger.info("  ✓ 已保存: predictions_v8_report.html")
+    logger.info("  Saved: predictions_v8_report.html")
     
-    # 完成摘要
-    logger.info("\n" + "="*60)
-    logger.info("✅ 完成！")
-    logger.info("="*60)
-    logger.info(f"\n📊 生成的文件:")
+    logger.info(f"\n\n{'='*60}")
+    logger.info(f"Complete!")
+    logger.info(f"{'='*60}")
+    logger.info(f"\nGenerated files:")
     for result in results:
-        logger.info(f"  - {result['symbol']}_predictions_v8.png (價格預測圖)")
-    logger.info(f"  - predictions_v8_report.html (HTML 報告)")
-    logger.info(f"\n🌐 在瀏覽器中打開: predictions_v8_report.html")
+        logger.info(f"  - {result['symbol']}_predictions_v8.png")
+    logger.info(f"  - predictions_v8_report.html")
+    logger.info(f"\nOpen in browser: predictions_v8_report.html")
 
 
 if __name__ == '__main__':
